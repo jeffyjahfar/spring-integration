@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 the original author or authors.
+ * Copyright 2019-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 package org.springframework.integration.amqp.support;
 
+import java.util.List;
+
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.support.ListenerExecutionFailedException;
 
@@ -25,6 +27,7 @@ import com.rabbitmq.client.Channel;
  * Utility methods for messaging endpoints.
  *
  * @author Gary Russell
+ * @author Artem Bilan
  *
  * @since 5.1.3
  *
@@ -34,7 +37,6 @@ public final class EndpointUtils {
 	private static final String LEFE_MESSAGE = "Message conversion failed";
 
 	private EndpointUtils() {
-		super();
 	}
 
 	/**
@@ -43,16 +45,36 @@ public final class EndpointUtils {
 	 * @param message the failed message.
 	 * @param channel the channel.
 	 * @param isManualAck true if the container uses manual acknowledgment.
-	 * @param e the exception.
+	 * @param ex the exception.
 	 * @return the exception.
 	 */
-	public static ListenerExecutionFailedException errorMessagePayload(final Message message,
-			Channel channel, boolean isManualAck, Exception e) {
+	public static ListenerExecutionFailedException errorMessagePayload(Message message,
+			Channel channel, boolean isManualAck, Exception ex) {
 
 		return isManualAck
-				? new ManualAckListenerExecutionFailedException(LEFE_MESSAGE, e, message, channel,
-						message.getMessageProperties().getDeliveryTag())
-				: new ListenerExecutionFailedException(LEFE_MESSAGE, e, message);
+				? new ManualAckListenerExecutionFailedException(LEFE_MESSAGE, ex, channel,
+						message.getMessageProperties().getDeliveryTag(), message)
+				: new ListenerExecutionFailedException(LEFE_MESSAGE, ex, message);
+	}
+
+	/**
+	 * Return an {@link ListenerExecutionFailedException} or a {@link ManualAckListenerExecutionFailedException}
+	 * depending on whether isManualAck is false or true.
+	 * @param messages the failed messages.
+	 * @param channel the channel.
+	 * @param isManualAck true if the container uses manual acknowledgment.
+	 * @param ex the exception.
+	 * @return the exception.
+	 * @since 5.3
+	 */
+	public static ListenerExecutionFailedException errorMessagePayload(List<Message> messages,
+			Channel channel, boolean isManualAck, Exception ex) {
+
+		return isManualAck
+				? new ManualAckListenerExecutionFailedException(LEFE_MESSAGE, ex, channel,
+						messages.get(messages.size() - 1).getMessageProperties().getDeliveryTag(),
+						messages.toArray(new Message[0]))
+				: new ListenerExecutionFailedException(LEFE_MESSAGE, ex, messages.toArray(new Message[0]));
 	}
 
 }

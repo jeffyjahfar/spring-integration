@@ -21,7 +21,9 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.fail;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
@@ -78,6 +80,13 @@ class SessionFactoryTests {
 
 		verify(client).logout();
 		verify(client).disconnect();
+
+		doThrow(RuntimeException.class).when(client).noop();
+
+		session.close();
+
+		verify(client).logout();
+		verify(client, times(2)).disconnect();
 	}
 
 	@Test
@@ -210,7 +219,6 @@ class SessionFactoryTests {
 					session.close();
 				}
 				catch (Exception e) {
-					e.printStackTrace();
 					failures.incrementAndGet();
 				}
 			});

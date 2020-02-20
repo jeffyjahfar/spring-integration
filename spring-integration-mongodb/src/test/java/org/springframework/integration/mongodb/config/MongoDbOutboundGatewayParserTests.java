@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,17 +17,17 @@
 package org.springframework.integration.mongodb.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import java.util.List;
 
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.parsing.BeanDefinitionParsingException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
-import org.springframework.data.mongodb.MongoDbFactory;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.expression.common.LiteralExpression;
 import org.springframework.expression.spel.standard.SpelExpression;
@@ -39,17 +39,15 @@ import org.springframework.integration.mongodb.outbound.MongoDbOutboundGateway;
 import org.springframework.integration.test.util.TestUtils;
 import org.springframework.messaging.MessageHandler;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 /**
- * @author Xavier Padr?
+ * @author Xavier Padro
  * @author Artem Bilan
  *
  * @since 5.0
  */
-@ContextConfiguration
-@RunWith(SpringRunner.class)
+@SpringJUnitConfig
 @DirtiesContext
 public class MongoDbOutboundGatewayParserTests {
 
@@ -57,7 +55,7 @@ public class MongoDbOutboundGatewayParserTests {
 	private ApplicationContext context;
 
 	@Autowired
-	private MongoDbFactory mongoDbFactory;
+	private MongoDatabaseFactory mongoDbFactory;
 
 	@Autowired
 	private MongoConverter mongoConverter;
@@ -139,22 +137,28 @@ public class MongoDbOutboundGatewayParserTests {
 				.isInstanceOf(MessageCollectionCallback.class);
 	}
 
-	@Test(expected = BeanDefinitionParsingException.class)
+	@Test
 	public void templateAndFactoryFail() {
-		new ClassPathXmlApplicationContext("outbound-gateway-fail-template-factory-config.xml", this.getClass())
-				.close();
+		assertThatExceptionOfType(BeanDefinitionParsingException.class)
+				.isThrownBy(() ->
+						new ClassPathXmlApplicationContext("outbound-gateway-fail-template-factory-config.xml",
+								getClass()));
 	}
 
-	@Test(expected = BeanDefinitionParsingException.class)
+	@Test
 	public void templateAndConverterFail() {
-		new ClassPathXmlApplicationContext("outbound-gateway-fail-template-converter-config.xml",
-				this.getClass()).close();
+		assertThatExceptionOfType(BeanDefinitionParsingException.class)
+				.isThrownBy(() ->
+						new ClassPathXmlApplicationContext("outbound-gateway-fail-template-converter-config.xml",
+								this.getClass()));
 	}
 
-	@Test(expected = BeanDefinitionParsingException.class)
+	@Test
 	public void collectionCallbackAndQueryFail() {
-		new ClassPathXmlApplicationContext("outbound-gateway-fail-collection-callback-config.xml",
-				this.getClass()).close();
+		assertThatExceptionOfType(BeanDefinitionParsingException.class)
+				.isThrownBy(() ->
+						new ClassPathXmlApplicationContext("outbound-gateway-fail-collection-callback-config.xml",
+								this.getClass()));
 	}
 
 }

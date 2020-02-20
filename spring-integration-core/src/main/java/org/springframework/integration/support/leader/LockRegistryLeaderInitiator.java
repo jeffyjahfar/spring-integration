@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -353,87 +353,11 @@ public class LockRegistryLeaderInitiator implements SmartLifecycle, DisposableBe
 			try {
 				while (isRunning()) {
 					try {
-
-						if (logger.isDebugEnabled()) {
-							logger.debug("Acquiring the lock for " + this.context);
-						}
-
-						// We always try to acquire the lock, in case it expired
-						boolean acquired = this.lock.tryLock(LockRegistryLeaderInitiator.this.heartBeatMillis,
-								TimeUnit.MILLISECONDS);
-						if (!this.locked) {
-							if (acquired) {
-								// Success: we are now leader
-								this.locked = true;
-								handleGranted();
-							}
-							else if (isPublishFailedEvents()) {
-								publishFailedToAcquire();
-							}
-						}
-						else if (acquired) {
-							// If we were able to acquire it but we were already locked we
-							// should release it
-							this.lock.unlock();
-							if (isRunning()) {
-								// Give it a chance to expire.
-								Thread.sleep(LockRegistryLeaderInitiator.this.heartBeatMillis);
-							}
-						}
-						else {
-							this.locked = false;
-							// We were not able to acquire it, therefore not leading any more
-							handleRevoked();
-							if (isRunning()) {
-								// Try again quickly in case the lock holder dropped it
-								Thread.sleep(LockRegistryLeaderInitiator.this.busyWaitMillis);
-							}
-						}
+						tryAcquireLock();
 					}
 					catch (Exception e) {
-						if (this.locked) {
-							this.locked = false;
-							try {
-								this.lock.unlock();
-							}
-							catch (Exception e1) {
-								logger.debug("Could not unlock - treat as broken " + this.context +
-										". Revoking " + (isRunning() ? " and retrying..." : "..."), e1);
-
-							}
-							// The lock was broken and we are no longer leader
-							handleRevoked();
-						}
-
-						if (e instanceof InterruptedException || Thread.currentThread().isInterrupted()) {
-							Thread.currentThread().interrupt();
-							if (isRunning()) {
-								logger.warn("Restarting LeaderSelector for " + this.context + " because of error.", e);
-								LockRegistryLeaderInitiator.this.future =
-										LockRegistryLeaderInitiator.this.executorService.submit(
-												() -> {
-													// Give it a chance to elect some other leader.
-													Thread.sleep(LockRegistryLeaderInitiator.this.busyWaitMillis);
-													return call();
-												});
-							}
+						if (handleLockException(e)) {
 							return null;
-						}
-						else {
-							if (isRunning()) {
-								// Give it a chance to elect some other leader.
-								try {
-									Thread.sleep(LockRegistryLeaderInitiator.this.busyWaitMillis);
-								}
-								catch (InterruptedException e1) {
-									// Ignore interruption and let it to be caught on the next cycle.
-									Thread.currentThread().interrupt();
-								}
-							}
-							if (logger.isDebugEnabled()) {
-								logger.debug("Error acquiring the lock for " + this.context +
-										". " + (isRunning() ? "Retrying..." : ""), e);
-							}
 						}
 					}
 				}
@@ -453,6 +377,95 @@ public class LockRegistryLeaderInitiator implements SmartLifecycle, DisposableBe
 				}
 			}
 			return null;
+		}
+
+		private void tryAcquireLock() throws InterruptedException {
+			if (logger.isDebugEnabled()) {
+				logger.debug("Acquiring the lock for " + this.context);
+			}
+			// We always try to acquire the lock, in case it expired
+			boolean acquired = this.lock.tryLock(LockRegistryLeaderInitiator.this.heartBeatMillis,
+					TimeUnit.MILLISECONDS);
+			if (!this.locked) {
+				if (acquired) {
+					// Success: we are now leader
+					this.locked = true;
+					handleGranted();
+				}
+				else if (isPublishFailedEvents()) {
+					publishFailedToAcquire();
+				}
+			}
+			else if (acquired) {
+				// If we were able to acquire it but we were already locked we
+				// should release it
+				this.lock.unlock();
+				if (isRunning()) {
+					// Give it a chance to expire.
+					Thread.sleep(LockRegistryLeaderInitiator.this.heartBeatMillis);
+				}
+			}
+			else {
+				this.locked = false;
+				// We were not able to acquire it, therefore not leading any more
+				handleRevoked();
+				if (isRunning()) {
+					// Try again quickly in case the lock holder dropped it
+					Thread.sleep(LockRegistryLeaderInitiator.this.busyWaitMillis);
+				}
+			}
+		}
+
+		private boolean handleLockException(Exception ex) { // NOSONAR
+			if (this.locked) {
+				this.locked = false;
+				try {
+					this.lock.unlock();
+				}
+				catch (Exception e1) {
+					logger.debug("Could not unlock - treat as broken " + this.context +
+							". Revoking " + (isRunning() ? " and retrying..." : "..."), e1);
+
+				}
+				// The lock was broken and we are no longer leader
+				handleRevoked();
+			}
+
+			if (ex instanceof InterruptedException || Thread.currentThread().isInterrupted()) {
+				Thread.currentThread().interrupt();
+				if (isRunning()) {
+					restartSelectorBecauseOfError(ex);
+				}
+				return true;
+			}
+			else {
+				if (isRunning()) {
+					// Give it a chance to elect some other leader.
+					try {
+						Thread.sleep(LockRegistryLeaderInitiator.this.busyWaitMillis);
+					}
+					catch (InterruptedException e1) {
+						// Ignore interruption and let it to be caught on the next cycle.
+						Thread.currentThread().interrupt();
+					}
+				}
+				if (logger.isDebugEnabled()) {
+					logger.debug("Error acquiring the lock for " + this.context +
+							". " + (isRunning() ? "Retrying..." : ""), ex);
+				}
+			}
+			return false;
+		}
+
+		private void restartSelectorBecauseOfError(Exception ex) {
+			logger.warn("Restarting LeaderSelector for " + this.context + " because of error.", ex);
+			LockRegistryLeaderInitiator.this.future =
+					LockRegistryLeaderInitiator.this.executorService.submit(
+							() -> {
+								// Give it a chance to elect some other leader.
+								Thread.sleep(LockRegistryLeaderInitiator.this.busyWaitMillis);
+								return call();
+							});
 		}
 
 		public boolean isLeader() {
@@ -508,7 +521,6 @@ public class LockRegistryLeaderInitiator implements SmartLifecycle, DisposableBe
 	private class LockContext implements Context {
 
 		LockContext() {
-			super();
 		}
 
 		@Override

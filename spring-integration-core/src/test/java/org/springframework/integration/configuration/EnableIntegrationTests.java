@@ -39,8 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.aopalliance.aop.Advice;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.apache.commons.logging.Log;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.beans.factory.FactoryBean;
@@ -56,6 +55,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.ImportResource;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.expression.EnvironmentAccessor;
 import org.springframework.context.expression.MapAccessor;
 import org.springframework.core.convert.converter.Converter;
@@ -66,6 +66,7 @@ import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.integration.annotation.Aggregator;
 import org.springframework.integration.annotation.BridgeFrom;
 import org.springframework.integration.annotation.BridgeTo;
+import org.springframework.integration.annotation.EndpointId;
 import org.springframework.integration.annotation.Gateway;
 import org.springframework.integration.annotation.GatewayHeader;
 import org.springframework.integration.annotation.InboundChannelAdapter;
@@ -95,6 +96,7 @@ import org.springframework.integration.core.MessageSource;
 import org.springframework.integration.core.MessagingTemplate;
 import org.springframework.integration.core.Pausable;
 import org.springframework.integration.endpoint.AbstractEndpoint;
+import org.springframework.integration.endpoint.EventDrivenConsumer;
 import org.springframework.integration.endpoint.MethodInvokingMessageSource;
 import org.springframework.integration.endpoint.PollingConsumer;
 import org.springframework.integration.expression.SpelPropertyAccessorRegistrar;
@@ -127,7 +129,7 @@ import org.springframework.scheduling.support.PeriodicTrigger;
 import org.springframework.stereotype.Component;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.MultiValueMap;
 
@@ -141,15 +143,17 @@ import reactor.core.publisher.Mono;
  *
  * @since 4.0
  */
-@ContextConfiguration(loader = NoBeansOverrideAnnotationConfigContextLoader.class,
-		classes = { EnableIntegrationTests.ContextConfiguration.class,
-				EnableIntegrationTests.ContextConfiguration2.class })
-@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration(loader = NoBeansOverrideAnnotationConfigContextLoader.class)
+@SpringJUnitConfig(classes = { EnableIntegrationTests.ContextConfiguration.class,
+		EnableIntegrationTests.ContextConfiguration2.class })
 @DirtiesContext
 public class EnableIntegrationTests {
 
 	@Autowired
 	private ApplicationContext context;
+
+	@Autowired
+	private ContextConfiguration2 contextConfiguration2;
 
 	@Autowired
 	private PollableChannel input;
@@ -286,6 +290,10 @@ public class EnableIntegrationTests {
 	@Autowired
 	private PublisherAnnotationBeanPostProcessor publisherAnnotationBeanPostProcessor;
 
+	@Autowired
+	@Qualifier("controlBusEndpoint")
+	private EventDrivenConsumer controlBusEndpoint;
+
 	@Test
 	public void testAnnotatedServiceActivator() throws Exception {
 		this.serviceActivatorEndpoint.start();
@@ -360,7 +368,7 @@ public class EnableIntegrationTests {
 		assertThat(messageHistory).isNotNull();
 		String messageHistoryString = messageHistory.toString();
 		assertThat(messageHistoryString).contains("input");
-		assertThat(messageHistoryString).contains("annotationTestService.handle.serviceActivator.handler");
+		assertThat(messageHistoryString).contains("annotationTestService.handle.serviceActivator");
 		assertThat(messageHistoryString).doesNotContain("output");
 
 		receive = this.publishedChannel.receive(10_000);
@@ -429,6 +437,12 @@ public class EnableIntegrationTests {
 		assertThat(beansOfType.keySet()
 				.contains("enableIntegrationTests.ContextConfiguration2.controlBus.serviceActivator.handler"))
 				.isFalse();
+
+		assertThat(this.controlBusEndpoint.getBeanName())
+				.isEqualTo(this.contextConfiguration2.controlBusEndpoint.getBeanName());
+
+		assertThat(this.controlBusEndpoint.getHandler())
+				.isSameAs(this.contextConfiguration2.controlBusEndpoint.getHandler());
 	}
 
 	@Test
@@ -1067,13 +1081,19 @@ public class EnableIntegrationTests {
 
 		@Bean
 		@ServiceActivator(inputChannel = "controlBusChannel")
+		@EndpointId("controlBusEndpoint")
 		@Role("bar")
 		public ExpressionControlBusFactoryBean controlBus() {
 			return new ExpressionControlBusFactoryBean();
 		}
 
+		@Autowired
+		@Qualifier("controlBusEndpoint")
+		@Lazy
+		private EventDrivenConsumer controlBusEndpoint;
+
 		@Bean
-		public Pausable pausable() {
+		public Pausable pausable(@Qualifier("controlBusChannel") @Lazy MessageChannel controlBusChannel) {
 			return new Pausable() {
 
 				private volatile boolean running;

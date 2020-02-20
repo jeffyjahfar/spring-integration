@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.springframework.integration.gateway;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.UndeclaredThrowableException;
 import java.util.Collections;
 import java.util.HashMap;
@@ -55,6 +56,7 @@ import org.springframework.expression.Expression;
 import org.springframework.expression.common.LiteralExpression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
+import org.springframework.integration.IntegrationPatternType;
 import org.springframework.integration.annotation.Gateway;
 import org.springframework.integration.annotation.GatewayHeader;
 import org.springframework.integration.endpoint.AbstractEndpoint;
@@ -107,7 +109,7 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 
 	private final Map<Method, MethodInvocationGateway> gatewayMap = new HashMap<>();
 
-	private Class<?> serviceInterface = RequestReplyExchanger.class;
+	private final Class<?> serviceInterface;
 
 	private MessageChannel defaultRequestChannel;
 
@@ -149,6 +151,8 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 
 	private MethodArgsMessageMapper argsMapper;
 
+	private boolean proxyDefaultMethods;
+
 	private EvaluationContext evaluationContext = new StandardEvaluationContext();
 
 	/**
@@ -157,23 +161,10 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 	 * {@link RequestReplyExchanger}, upon initialization.
 	 */
 	public GatewayProxyFactoryBean() {
+		this.serviceInterface = RequestReplyExchanger.class;
 	}
 
 	public GatewayProxyFactoryBean(Class<?> serviceInterface) {
-		Assert.notNull(serviceInterface, "'serviceInterface' must not be null");
-		Assert.isTrue(serviceInterface.isInterface(), "'serviceInterface' must be an interface");
-		this.serviceInterface = serviceInterface;
-	}
-
-
-	/**
-	 * Set the interface class that the generated proxy should implement.
-	 * If none is provided explicitly, the default is {@link RequestReplyExchanger}.
-	 * @param serviceInterface The service interface.
-	 * @deprecated since 5.2.1 in favor of ctor initialization
-	 */
-	@Deprecated
-	public void setServiceInterface(Class<?> serviceInterface) {
 		Assert.notNull(serviceInterface, "'serviceInterface' must not be null");
 		Assert.isTrue(serviceInterface.isInterface(), "'serviceInterface' must be an interface");
 		this.serviceInterface = serviceInterface;
@@ -361,6 +352,19 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 		this.argsMapper = mapper;
 	}
 
+	/**
+	 * Indicate if {@code default} methods on the interface should be proxied as well.
+	 * If an explicit {@link Gateway} annotation is present on method it is proxied
+	 * independently of this option.
+	 * Note: default methods in JDK classes (such as {@code Function}) can be proxied, but cannot be invoked
+	 * via {@code MethodHandle} by an internal Java security restriction for {@code MethodHandle.Lookup}.
+	 * @param proxyDefaultMethods the boolean flag to proxy default methods or invoke via {@code MethodHandle}.
+	 * @since 5.3
+	 */
+	public void setProxyDefaultMethods(boolean proxyDefaultMethods) {
+		this.proxyDefaultMethods = proxyDefaultMethods;
+	}
+
 	protected AsyncTaskExecutor getAsyncExecutor() {
 		return this.asyncExecutor;
 	}
@@ -385,14 +389,13 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 			if (this.channelResolver == null && beanFactory != null) {
 				this.channelResolver = ChannelResolverUtils.getChannelResolver(beanFactory);
 			}
-			Method[] methods = ReflectionUtils.getUniqueDeclaredMethods(this.serviceInterface);
-			for (Method method : methods) {
-				MethodInvocationGateway gateway = createGatewayForMethod(method);
-				this.gatewayMap.put(method, gateway);
-			}
-			this.serviceProxy =
-					new ProxyFactory(this.serviceInterface, this)
-							.getProxy(this.beanClassLoader);
+
+			populateMethodInvocationGateways();
+
+			ProxyFactory gatewayProxyFactory =
+					new ProxyFactory(this.serviceInterface, this);
+			gatewayProxyFactory.addAdvice(new DefaultMethodInvokingMethodInterceptor());
+			this.serviceProxy = gatewayProxyFactory.getProxy(this.beanClassLoader);
 			if (this.asyncExecutor != null) {
 				Callable<String> task = () -> null;
 				Future<String> submitType = this.asyncExecutor.submit(task);
@@ -404,6 +407,19 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 			}
 			this.evaluationContext = ExpressionUtils.createStandardEvaluationContext(beanFactory);
 			this.initialized = true;
+		}
+	}
+
+	private void populateMethodInvocationGateways() {
+		Method[] methods = ReflectionUtils.getUniqueDeclaredMethods(this.serviceInterface);
+		for (Method method : methods) {
+			if (Modifier.isAbstract(method.getModifiers())
+					|| method.getAnnotation(Gateway.class) != null
+					|| (method.isDefault() && this.proxyDefaultMethods)) {
+
+				MethodInvocationGateway gateway = createGatewayForMethod(method);
+				this.gatewayMap.put(method, gateway);
+			}
 		}
 	}
 
@@ -476,6 +492,14 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 		}
 		Method method = invocation.getMethod();
 		MethodInvocationGateway gateway = this.gatewayMap.get(method);
+		if (gateway == null) {
+			try {
+				return invocation.proceed();
+			}
+			catch (Throwable throwable) { // NOSONAR
+				throw new IllegalStateException(throwable);
+			}
+		}
 		boolean shouldReturnMessage =
 				Message.class.isAssignableFrom(gateway.returnType) || (!runningOnCallerThread && gateway.expectMessage);
 		boolean shouldReply = gateway.returnType != void.class;
@@ -760,6 +784,10 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 		MethodInvocationGateway gateway = new MethodInvocationGateway(messageMapper);
 		gateway.setupReturnType(this.serviceInterface, method);
 
+		if (method.getParameterTypes().length == 0 && !findPayloadExpression(method)) {
+			gateway.setPollable();
+		}
+
 		JavaUtils.INSTANCE
 				.acceptIfNotNull(payloadExpression, messageMapper::setPayloadExpression)
 				.acceptIfNotNull(getTaskScheduler(), gateway::setTaskScheduler);
@@ -938,8 +966,20 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 
 		private boolean isMonoReturn;
 
+		private boolean isVoidReturn;
+
+		private boolean pollable;
+
 		MethodInvocationGateway(GatewayMethodInboundMessageMapper messageMapper) {
 			setRequestMapper(messageMapper);
+		}
+
+		@Override
+		public IntegrationPatternType getIntegrationPatternType() {
+			return this.pollable ? IntegrationPatternType.outbound_channel_adapter
+					: this.isVoidReturn
+							? IntegrationPatternType.inbound_channel_adapter
+							: IntegrationPatternType.inbound_gateway;
 		}
 
 		@Nullable
@@ -967,11 +1007,24 @@ public class GatewayProxyFactoryBean extends AbstractEndpoint
 				this.isMonoReturn = Mono.class.isAssignableFrom(this.returnType);
 				this.expectMessage = hasReturnParameterizedWithMessage(resolvableType);
 			}
+			this.isVoidReturn = isVoidReturnType(resolvableType);
 		}
 
 		private boolean hasReturnParameterizedWithMessage(ResolvableType resolvableType) {
 			return (Future.class.isAssignableFrom(this.returnType) || Mono.class.isAssignableFrom(this.returnType))
 					&& Message.class.isAssignableFrom(resolvableType.getGeneric(0).resolve(Object.class));
+		}
+
+		private boolean isVoidReturnType(ResolvableType resolvableType) {
+			Class<?> returnTypeToCheck = this.returnType;
+			if (Future.class.isAssignableFrom(this.returnType) || Mono.class.isAssignableFrom(this.returnType)) {
+				returnTypeToCheck = resolvableType.getGeneric(0).resolve(Object.class);
+			}
+			return Void.class.isAssignableFrom(returnTypeToCheck);
+		}
+
+		private void setPollable() {
+			this.pollable = true;
 		}
 
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.springframework.integration.channel.reactive;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
@@ -32,7 +33,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.Test;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.reactivestreams.Subscriber;
@@ -46,10 +49,16 @@ import org.springframework.integration.channel.QueueChannel;
 import org.springframework.integration.config.ConsumerEndpointFactoryBean;
 import org.springframework.integration.endpoint.ReactiveStreamsConsumer;
 import org.springframework.integration.handler.MethodInvokingMessageHandler;
+import org.springframework.integration.test.condition.LogLevels;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageDeliveryException;
 import org.springframework.messaging.MessageHandler;
+import org.springframework.messaging.ReactiveMessageHandler;
 import org.springframework.messaging.support.GenericMessage;
+
+import reactor.core.publisher.EmitterProcessor;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 /**
  * @author Artem Bilan
@@ -57,6 +66,8 @@ import org.springframework.messaging.support.GenericMessage;
  * @since 5.0
  */
 public class ReactiveStreamsConsumerTests {
+
+	private static final Log LOGGER = LogFactory.getLog(ReactiveStreamsConsumerTests.class);
 
 	@Test
 	public void testReactiveStreamsConsumerFluxMessageChannel() throws InterruptedException {
@@ -94,6 +105,8 @@ public class ReactiveStreamsConsumerTests {
 
 		assertThat(stopLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(result).containsExactly(testMessage, testMessage2);
+
+		reactiveConsumer.stop();
 	}
 
 
@@ -158,6 +171,7 @@ public class ReactiveStreamsConsumerTests {
 		reactiveConsumer.stop();
 	}
 
+	@LogLevels(level = "trace", categories = "org.springframework.integration")
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testReactiveStreamsConsumerPollableChannel() throws InterruptedException {
@@ -168,7 +182,9 @@ public class ReactiveStreamsConsumerTests {
 		BlockingQueue<Message<?>> messages = new LinkedBlockingQueue<>();
 
 		willAnswer(i -> {
-			messages.put(i.getArgument(0));
+			Message<?> message = i.getArgument(0);
+			LOGGER.debug("Polled message: " + message);
+			messages.put(message);
 			return null;
 		})
 				.given(testSubscriber)
@@ -207,6 +223,10 @@ public class ReactiveStreamsConsumerTests {
 
 		testChannel.send(testMessage2);
 
+		await().untilAsserted(() -> assertThat(messages).hasSizeGreaterThan(0));
+
+		LOGGER.debug("Messages to poll: " + messages);
+
 		message = messages.poll(10, TimeUnit.SECONDS);
 		assertThat(message).isSameAs(testMessage);
 
@@ -217,6 +237,8 @@ public class ReactiveStreamsConsumerTests {
 		verify(testSubscriber, never()).onComplete();
 
 		assertThat(messages.isEmpty()).isTrue();
+
+		reactiveConsumer.stop();
 	}
 
 	@Test
@@ -259,6 +281,48 @@ public class ReactiveStreamsConsumerTests {
 		assertThat(stopLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(result.size()).isEqualTo(3);
 		assertThat(result).containsExactly(testMessage, testMessage2, testMessage2);
+
+		endpointFactoryBean.stop();
+	}
+
+	@Test
+	public void testReactiveStreamsConsumerFluxMessageChannelReactiveMessageHandler() {
+		FluxMessageChannel testChannel = new FluxMessageChannel();
+
+		EmitterProcessor<Message<?>> processor = EmitterProcessor.create(2, false);
+
+		ReactiveMessageHandler messageHandler =
+				m -> {
+					processor.onNext(m);
+					return Mono.empty();
+				};
+
+		ReactiveStreamsConsumer reactiveConsumer = new ReactiveStreamsConsumer(testChannel, messageHandler);
+		reactiveConsumer.setBeanFactory(mock(BeanFactory.class));
+		reactiveConsumer.afterPropertiesSet();
+		reactiveConsumer.start();
+
+		Message<?> testMessage = new GenericMessage<>("test");
+		testChannel.send(testMessage);
+
+		reactiveConsumer.stop();
+
+		assertThatExceptionOfType(MessageDeliveryException.class)
+				.isThrownBy(() -> testChannel.send(testMessage))
+				.withCauseInstanceOf(IllegalStateException.class)
+				.withMessageContaining("doesn't have subscribers to accept messages");
+
+		reactiveConsumer.start();
+
+		Message<?> testMessage2 = new GenericMessage<>("test2");
+		testChannel.send(testMessage2);
+
+		StepVerifier.create(processor)
+				.expectNext(testMessage, testMessage2)
+				.thenCancel()
+				.verify();
+
+		reactiveConsumer.stop();
 	}
 
 }

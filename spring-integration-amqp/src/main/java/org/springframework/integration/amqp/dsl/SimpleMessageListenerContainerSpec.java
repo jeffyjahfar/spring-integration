@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 public class SimpleMessageListenerContainerSpec extends
 		AbstractMessageListenerContainerSpec<SimpleMessageListenerContainerSpec, SimpleMessageListenerContainer> {
 
-	private final SimpleMessageListenerContainer listenerContainer;
+	protected final SimpleMessageListenerContainer listenerContainer; // NOSONAR
 
 	public SimpleMessageListenerContainerSpec(SimpleMessageListenerContainer listenerContainer) {
 		super(listenerContainer);
@@ -108,17 +108,6 @@ public class SimpleMessageListenerContainerSpec extends
 	}
 
 	/**
-	 * @param txSize the txSize.
-	 * @return the spec.
-	 * @see SimpleMessageListenerContainer#setBatchSize(int)
-	 * @deprecated since 5.2 in favor of {@link #batchSize(int)}
-	 */
-	@Deprecated
-	public SimpleMessageListenerContainerSpec txSize(int txSize) {
-		return batchSize(txSize);
-	}
-
-	/**
 	 * The batch size to use.
 	 * @param batchSize the batchSize.
 	 * @return the spec.
@@ -127,6 +116,17 @@ public class SimpleMessageListenerContainerSpec extends
 	 */
 	public SimpleMessageListenerContainerSpec batchSize(int batchSize) {
 		this.listenerContainer.setBatchSize(batchSize);
+		return this;
+	}
+
+	/**
+	 * Set to true to enable batching of consumed messages.
+	 * @param enabled true to enable.
+	 * @return the spec.
+	 * @since 5.3
+	 */
+	public SimpleMessageListenerContainerSpec consumerBatchEnabled(boolean enabled) {
+		this.listenerContainer.setConsumerBatchEnabled(enabled);
 		return this;
 	}
 

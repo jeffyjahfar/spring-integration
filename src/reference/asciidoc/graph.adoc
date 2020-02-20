@@ -14,13 +14,15 @@ A Spring Integration application with only the default components would expose a
 {
   "contentDescriptor" : {
     "providerVersion" : "{project-version}",
-    "providerFormatVersion" : 1.1,
+    "providerFormatVersion" : 1.2,
     "provider" : "spring-integration",
     "name" : "myAppName:1.0"
   },
   "nodes" : [ {
     "nodeId" : 1,
     "componentType" : "null-channel",
+    "integrationPatternType" : "null_channel",
+    "integrationPatternCategory" : "messaging_channel",
     "properties" : { },
     "sendTimers" : {
       "successes" : {
@@ -42,6 +44,8 @@ A Spring Integration application with only the default components would expose a
   }, {
     "nodeId" : 2,
     "componentType" : "publish-subscribe-channel",
+    "integrationPatternType" : "publish_subscribe_channel",
+    "integrationPatternCategory" : "messaging_channel",
     "properties" : { },
     "sendTimers" : {
       "successes" : {
@@ -59,6 +63,8 @@ A Spring Integration application with only the default components would expose a
   }, {
     "nodeId" : 3,
     "componentType" : "logging-channel-adapter",
+    "integrationPatternType" : "outbound_channel_adapter",
+    "integrationPatternCategory" : "messaging_endpoint",
     "properties" : { },
     "output" : null,
     "input" : "errorChannel",
@@ -74,7 +80,7 @@ A Spring Integration application with only the default components would expose a
         "max" : 0.0
       }
     },
-    "name" : "_org.springframework.integration.errorLogger"
+    "name" : "errorLogger"
   } ],
   "links" : [ {
     "from" : 2,
@@ -137,29 +143,7 @@ The `nodes` graph element is perhaps the most interesting, because its elements 
 Node elements contain various properties that are generally self-explanatory.
 For example, expression-based components include the `expression` property that contains the primary expression string for the component.
 To enable the metrics, add an `@EnableIntegrationManagement` to a `@Configuration` class or add an `<int:management/>` element to your XML configuration.
-You can control exactly which components in the framework collect statistics.
 See  <<./metrics.adoc#metrics-management,Metrics and Management>> for complete information.
-See the `stats` attribute from the `o.s.i.errorLogger` component in the JSON example shown earlier.
-In this case, The `nullChannel` and `errorChannel` do not provide statistics information, because the configuration for this example was as follows:
-
-====
-[source,java]
-----
-@Configuration
-@EnableIntegration
-@EnableIntegrationManagement(statsEnabled = "_org.springframework.integration.errorLogger.handler",
-      countsEnabled = "!*",
-      defaultLoggingEnabled = "false")
-public class ManagementConfiguration {
-
-    @Bean
-    public IntegrationGraphServer integrationGraphServer() {
-        return new IntegrationGraphServer();
-    }
-
-}
-----
-====
 
 The `nodeId` represents a unique incremental identifier to let you distinguish one component from another.
 It is also used in the `links` element to represent a relationship (connection) of this component to others, if any.
@@ -219,13 +203,14 @@ The preceding gateway produces nodes similar to the following:
 
 ====
 [source,json]
-
 ----
 {
   "nodeId" : 10,
   "name" : "gate.bar(class java.lang.String)",
   "stats" : null,
   "componentType" : "gateway",
+  "integrationPatternType" : "gateway",
+  "integrationPatternCategory" : "messaging_endpoint",
   "output" : "four",
   "errors" : null
 },
@@ -234,6 +219,8 @@ The preceding gateway produces nodes similar to the following:
   "name" : "gate.foo(class java.lang.String)",
   "stats" : null,
   "componentType" : "gateway",
+  "integrationPatternType" : "gateway",
+  "integrationPatternCategory" : "messaging_endpoint",
   "output" : "four",
   "errors" : null
 },
@@ -242,6 +229,8 @@ The preceding gateway produces nodes similar to the following:
   "name" : "gate.foo(class java.lang.Integer)",
   "stats" : null,
   "componentType" : "gateway",
+  "integrationPatternType" : "gateway",
+  "integrationPatternCategory" : "messaging_endpoint",
   "output" : "four",
   "errors" : null
 }
@@ -250,6 +239,9 @@ The preceding gateway produces nodes similar to the following:
 
 You can use this  `IntegrationNode` hierarchy for parsing the graph model on the client side as well as to understand the general Spring Integration runtime behavior.
 See also <<./overview.adoc#programming-tips,Programming Tips and Tricks>> for more information.
+
+Version 5.3 introduced an `IntegrationPattern` abstraction and all out-of-the-box components, which represent an Enterprise Integration Pattern (EIP), implement this abstraction and provide an `IntegrationPatternType` enum value.
+This information can be useful for some categorizing logic in the target application or, being exposed into the graph node, it can be used by a UI to determine how to draw the component.
 
 === Integration Graph Controller
 

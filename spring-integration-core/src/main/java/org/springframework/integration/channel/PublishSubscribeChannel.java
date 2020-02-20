@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package org.springframework.integration.channel;
 import java.util.concurrent.Executor;
 
 import org.springframework.beans.factory.BeanFactory;
+import org.springframework.integration.IntegrationPatternType;
 import org.springframework.integration.context.IntegrationProperties;
 import org.springframework.integration.dispatcher.BroadcastingDispatcher;
 import org.springframework.integration.util.ErrorHandlingTaskExecutor;
@@ -69,6 +70,11 @@ public class PublishSubscribeChannel extends AbstractExecutorChannel {
 		return "publish-subscribe-channel";
 	}
 
+	@Override
+	public IntegrationPatternType getIntegrationPatternType() {
+		return IntegrationPatternType.publish_subscribe_channel;
+	}
+
 	/**
 	 * Provide an {@link ErrorHandler} strategy for handling Exceptions that
 	 * occur downstream from this channel. This will <i>only</i> be applied if
@@ -116,7 +122,6 @@ public class PublishSubscribeChannel extends AbstractExecutorChannel {
 	 * If at least this number of subscribers receive the message,
 	 * {@link #send(org.springframework.messaging.Message)}
 	 * will return true. Default: 0.
-	 *
 	 * @param minSubscribers The minimum number of subscribers.
 	 */
 	public void setMinSubscribers(int minSubscribers) {
@@ -148,12 +153,10 @@ public class PublishSubscribeChannel extends AbstractExecutorChannel {
 			dispatcherToUse.setMinSubscribers(this.minSubscribers);
 			this.dispatcher = dispatcherToUse;
 		}
-		else if (this.errorHandler != null) {
-			if (this.logger.isWarnEnabled()) {
-				this.logger.warn("The 'errorHandler' is ignored for the '" + getComponentName() +
-						"' (an 'executor' is not provided) and exceptions will be thrown " +
-						"directly within the sending Thread");
-			}
+		else if (this.errorHandler != null && this.logger.isWarnEnabled()) {
+			this.logger.warn("The 'errorHandler' is ignored for the '" + getComponentName() +
+					"' (an 'executor' is not provided) and exceptions will be thrown " +
+					"directly within the sending Thread");
 		}
 
 		if (this.maxSubscribers == null) {

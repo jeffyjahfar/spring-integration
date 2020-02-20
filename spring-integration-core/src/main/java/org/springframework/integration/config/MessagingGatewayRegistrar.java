@@ -23,8 +23,8 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 
-import org.springframework.beans.BeanMetadataAttribute;
 import org.springframework.beans.factory.BeanDefinitionStoreException;
+import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanDefinitionHolder;
 import org.springframework.beans.factory.support.AbstractBeanDefinition;
@@ -58,6 +58,8 @@ import org.springframework.util.StringUtils;
  */
 public class MessagingGatewayRegistrar implements ImportBeanDefinitionRegistrar {
 
+	private static final String PROXY_DEFAULT_METHODS_ATTR = "proxyDefaultMethods";
+
 	@Override
 	public void registerBeanDefinitions(AnnotationMetadata importingClassMetadata, BeanDefinitionRegistry registry) {
 		if (importingClassMetadata != null && importingClassMetadata.isAnnotated(MessagingGateway.class.getName())) {
@@ -68,8 +70,9 @@ public class MessagingGatewayRegistrar implements ImportBeanDefinitionRegistrar 
 					importingClassMetadata.getAnnotationAttributes(MessagingGateway.class.getName());
 			replaceEmptyOverrides(valuesHierarchy, annotationAttributes); // NOSONAR never null
 			annotationAttributes.put("serviceInterface", importingClassMetadata.getClassName());
-
-			BeanDefinitionReaderUtils.registerBeanDefinition(this.parse(annotationAttributes), registry);
+			annotationAttributes.put(PROXY_DEFAULT_METHODS_ATTR,
+					"" + annotationAttributes.remove(PROXY_DEFAULT_METHODS_ATTR));
+			BeanDefinitionReaderUtils.registerBeanDefinition(parse(annotationAttributes), registry);
 		}
 	}
 
@@ -84,6 +87,7 @@ public class MessagingGatewayRegistrar implements ImportBeanDefinitionRegistrar 
 		String errorChannel = (String) gatewayAttributes.get("errorChannel");
 		String asyncExecutor = (String) gatewayAttributes.get("asyncExecutor");
 		String mapper = (String) gatewayAttributes.get("mapper");
+		String proxyDefaultMethods = (String) gatewayAttributes.get(PROXY_DEFAULT_METHODS_ATTR);
 
 		boolean hasMapper = StringUtils.hasText(mapper);
 		boolean hasDefaultPayloadExpression = StringUtils.hasText(defaultPayloadExpression);
@@ -152,6 +156,9 @@ public class MessagingGatewayRegistrar implements ImportBeanDefinitionRegistrar 
 		if (StringUtils.hasText(mapper)) {
 			gatewayProxyBuilder.addPropertyReference("mapper", mapper);
 		}
+		if (StringUtils.hasText(proxyDefaultMethods)) {
+			gatewayProxyBuilder.addPropertyValue(PROXY_DEFAULT_METHODS_ATTR, proxyDefaultMethods);
+		}
 
 		gatewayProxyBuilder.addPropertyValue("defaultRequestTimeoutExpressionString",
 				gatewayAttributes.get("defaultRequestTimeout"));
@@ -172,9 +179,7 @@ public class MessagingGatewayRegistrar implements ImportBeanDefinitionRegistrar 
 		gatewayProxyBuilder.addConstructorArgValue(serviceInterface);
 
 		AbstractBeanDefinition beanDefinition = gatewayProxyBuilder.getBeanDefinition();
-		beanDefinition.addMetadataAttribute(new BeanMetadataAttribute(IntegrationConfigUtils.FACTORY_BEAN_OBJECT_TYPE,
-				serviceInterface));
-
+		beanDefinition.setAttribute(FactoryBean.OBJECT_TYPE_ATTRIBUTE, serviceInterface);
 		return new BeanDefinitionHolder(beanDefinition, id);
 	}
 
@@ -184,7 +189,7 @@ public class MessagingGatewayRegistrar implements ImportBeanDefinitionRegistrar 
 	 * @param importingClassMetadata The importing class metadata
 	 * @return The captured values.
 	 */
-	private  static List<MultiValueMap<String, Object>> captureMetaAnnotationValues(
+	private static List<MultiValueMap<String, Object>> captureMetaAnnotationValues(
 			AnnotationMetadata importingClassMetadata) {
 
 		Set<String> directAnnotations = importingClassMetadata.getAnnotationTypes();

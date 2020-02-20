@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.springframework.integration.amqp.inbound;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +27,7 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.batch.BatchingStrategy;
 import org.springframework.amqp.rabbit.batch.SimpleBatchingStrategy;
 import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.api.ChannelAwareBatchMessageListener;
 import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.amqp.support.converter.MessageConversionException;
@@ -41,7 +43,9 @@ import org.springframework.integration.amqp.support.EndpointUtils;
 import org.springframework.integration.context.OrderlyShutdownCapable;
 import org.springframework.integration.endpoint.MessageProducerSupport;
 import org.springframework.integration.support.ErrorMessageUtils;
+import org.springframework.messaging.MessageChannel;
 import org.springframework.retry.RecoveryCallback;
+import org.springframework.retry.RetryOperations;
 import org.springframework.retry.support.RetrySynchronizationManager;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
@@ -61,21 +65,42 @@ import com.rabbitmq.client.Channel;
 public class AmqpInboundChannelAdapter extends MessageProducerSupport implements
 		OrderlyShutdownCapable {
 
-	private static final ThreadLocal<AttributeAccessor> attributesHolder = new ThreadLocal<AttributeAccessor>();
+	/**
+	 * Defines the payload type when the listener container is configured with consumerBatchEnabled.
+	 */
+	public enum BatchMode {
+
+		/**
+		 * Payload is a {@code List<Message<?>>} where each element is a message is
+		 * converted from the Spring AMQP Message.
+		 */
+		MESSAGES,
+
+		/**
+		 * Payload is a {@code List<?>} where each element is the converted body of the
+		 * Spring AMQP Message.
+		 */
+		EXTRACT_PAYLOADS
+
+	}
+
+	private static final ThreadLocal<AttributeAccessor> ATTRIBUTES_HOLDER = new ThreadLocal<>();
 
 	private final AbstractMessageListenerContainer messageListenerContainer;
 
-	private volatile MessageConverter messageConverter = new SimpleMessageConverter();
+	private MessageConverter messageConverter = new SimpleMessageConverter();
 
-	private volatile AmqpHeaderMapper headerMapper = DefaultAmqpHeaderMapper.inboundMapper();
+	private AmqpHeaderMapper headerMapper = DefaultAmqpHeaderMapper.inboundMapper();
 
 	private RetryTemplate retryTemplate;
 
-	private RecoveryCallback<? extends Object> recoveryCallback;
+	private RecoveryCallback<?> recoveryCallback;
 
 	private BatchingStrategy batchingStrategy = new SimpleBatchingStrategy(0, 0, 0L);
 
 	private boolean bindSourceMessage;
+
+	private BatchMode batchMode = BatchMode.MESSAGES;
 
 	public AmqpInboundChannelAdapter(AbstractMessageListenerContainer listenerContainer) {
 		Assert.notNull(listenerContainer, "listenerContainer must not be null");
@@ -119,12 +144,13 @@ public class AmqpInboundChannelAdapter extends MessageProducerSupport implements
 	 * @since 4.3.10
 	 * @see #setRetryTemplate(RetryTemplate)
 	 */
-	public void setRecoveryCallback(RecoveryCallback<? extends Object> recoveryCallback) {
+	public void setRecoveryCallback(RecoveryCallback<?> recoveryCallback) {
 		this.recoveryCallback = recoveryCallback;
 	}
 
 	/**
-	 * Set a batching strategy to use when de-batching messages.
+	 * Set a batching strategy to use when de-batching messages created by a batching
+	 * producer (such as the BatchingRabbitTemplate).
 	 * Default is {@link SimpleBatchingStrategy}.
 	 * @param batchingStrategy the strategy.
 	 * @since 5.2
@@ -144,6 +170,17 @@ public class AmqpInboundChannelAdapter extends MessageProducerSupport implements
 		this.bindSourceMessage = bindSourceMessage;
 	}
 
+	/**
+	 * When the listener container is configured with consumerBatchEnabled, set the payload
+	 * type for messages generated for the batches. Default is {@link BatchMode#MESSAGES}.
+	 * @param batchMode the batch mode.
+	 * @since 5.3
+	 */
+	public void setBatchMode(BatchMode batchMode) {
+		Assert.notNull(batchMode, "'batchMode' cannot be null");
+		this.batchMode = batchMode;
+	}
+
 	@Override
 	public String getComponentType() {
 		return "amqp:inbound-channel-adapter";
@@ -156,7 +193,13 @@ public class AmqpInboundChannelAdapter extends MessageProducerSupport implements
 					+ "provided; use an 'ErrorMessageSendingRecoverer' in the 'recoveryCallback' property to "
 					+ "send an error message when retries are exhausted");
 		}
-		Listener messageListener = new Listener();
+		Listener messageListener;
+		if (this.messageListenerContainer.isConsumerBatchEnabled()) {
+			messageListener = new BatchListener();
+		}
+		else {
+			messageListener = new Listener();
+		}
 		this.messageListenerContainer.setMessageListener(messageListener);
 		this.messageListenerContainer.afterPropertiesSet();
 		super.onInit();
@@ -193,16 +236,16 @@ public class AmqpInboundChannelAdapter extends MessageProducerSupport implements
 	 * @param message the Spring Messaging message to use.
 	 * @since 4.3.10
 	 */
-	private void setAttributesIfNecessary(Message amqpMessage, org.springframework.messaging.Message<?> message) {
+	private void setAttributesIfNecessary(Object amqpMessage, org.springframework.messaging.Message<?> message) {
 		boolean needHolder = getErrorChannel() != null && this.retryTemplate == null;
 		boolean needAttributes = needHolder || this.retryTemplate != null;
 		if (needHolder) {
-			attributesHolder.set(ErrorMessageUtils.getAttributeAccessor(null, null));
+			ATTRIBUTES_HOLDER.set(ErrorMessageUtils.getAttributeAccessor(null, null));
 		}
 		if (needAttributes) {
 			AttributeAccessor attributes = this.retryTemplate != null
 					? RetrySynchronizationManager.getContext()
-					: attributesHolder.get();
+					: ATTRIBUTES_HOLDER.get();
 			if (attributes != null) {
 				attributes.setAttribute(ErrorMessageUtils.INPUT_MESSAGE_CONTEXT_KEY, message);
 				attributes.setAttribute(AmqpMessageHeaderErrorMessageStrategy.AMQP_RAW_MESSAGE, amqpMessage);
@@ -212,7 +255,7 @@ public class AmqpInboundChannelAdapter extends MessageProducerSupport implements
 
 	@Override
 	protected AttributeAccessor getErrorMessageAttributes(org.springframework.messaging.Message<?> message) {
-		AttributeAccessor attributes = attributesHolder.get();
+		AttributeAccessor attributes = ATTRIBUTES_HOLDER.get();
 		if (attributes == null) {
 			return super.getErrorMessageAttributes(message);
 		}
@@ -223,82 +266,196 @@ public class AmqpInboundChannelAdapter extends MessageProducerSupport implements
 
 	protected class Listener implements ChannelAwareMessageListener {
 
-		@SuppressWarnings("unchecked")
+		protected final MessageConverter converter = AmqpInboundChannelAdapter.this.messageConverter; // NOSONAR
+
+		protected final boolean manualAcks = // NNOSONAR
+				AcknowledgeMode.MANUAL == AmqpInboundChannelAdapter.this.messageListenerContainer.getAcknowledgeMode();
+
+		protected final RetryOperations retryOps = AmqpInboundChannelAdapter.this.retryTemplate; // NOSONAR
+
+		protected final RecoveryCallback<?> recoverer = AmqpInboundChannelAdapter.this.recoveryCallback; // NOSONAR
+
+		protected Listener() {
+		}
+
 		@Override
 		public void onMessage(final Message message, final Channel channel) {
-			boolean retryDisabled = AmqpInboundChannelAdapter.this.retryTemplate == null;
 			try {
-				if (retryDisabled) {
+				if (this.retryOps == null) {
 					createAndSend(message, channel);
 				}
 				else {
-					final org.springframework.messaging.Message<Object> toSend = createMessage(message, channel);
-					AmqpInboundChannelAdapter.this.retryTemplate.execute(context -> {
+					final org.springframework.messaging.Message<Object> toSend =
+							createMessageFromAmqp(message, channel);
+					this.retryOps.execute(
+							context -> {
 								StaticMessageHeaderAccessor.getDeliveryAttempt(toSend).incrementAndGet();
 								setAttributesIfNecessary(message, toSend);
 								sendMessage(toSend);
 								return null;
-							},
-							(RecoveryCallback<Object>) AmqpInboundChannelAdapter.this.recoveryCallback);
+							}, this.recoverer);
 				}
 			}
 			catch (MessageConversionException e) {
-				if (getErrorChannel() != null) {
+				MessageChannel errorChannel = getErrorChannel();
+				if (errorChannel != null) {
 					setAttributesIfNecessary(message, null);
 					getMessagingTemplate()
-						.send(getErrorChannel(), buildErrorMessage(null,
-								EndpointUtils.errorMessagePayload(message, channel, isManualAck(), e)));
+							.send(errorChannel,
+									buildErrorMessage(null,
+											EndpointUtils.errorMessagePayload(message, channel, this.manualAcks, e)));
 				}
 				else {
 					throw e;
 				}
 			}
 			finally {
-				if (retryDisabled) {
-					attributesHolder.remove();
+				if (this.retryOps == null) {
+					ATTRIBUTES_HOLDER.remove();
 				}
 			}
 		}
 
 		private void createAndSend(Message message, Channel channel) {
-			org.springframework.messaging.Message<Object> messagingMessage = createMessage(message, channel);
+			org.springframework.messaging.Message<Object> messagingMessage = createMessageFromAmqp(message, channel);
 			setAttributesIfNecessary(message, messagingMessage);
 			sendMessage(messagingMessage);
 		}
 
-		private org.springframework.messaging.Message<Object> createMessage(Message message, Channel channel) {
+		protected org.springframework.messaging.Message<Object> createMessageFromAmqp(Message message,
+				Channel channel) {
+
+			Object payload = convertPayload(message);
+			Map<String, Object> headers =
+					AmqpInboundChannelAdapter.this.headerMapper.toHeadersFromRequest(message.getMessageProperties());
+			if (AmqpInboundChannelAdapter.this.bindSourceMessage) {
+				headers.put(IntegrationMessageHeaderAccessor.SOURCE_DATA, message);
+			}
+			long deliveryTag = message.getMessageProperties().getDeliveryTag();
+			return createMessageFromPayload(payload, channel, headers, deliveryTag);
+		}
+
+		protected Object convertPayload(Message message) {
 			Object payload;
 			if (AmqpInboundChannelAdapter.this.batchingStrategy.canDebatch(message.getMessageProperties())) {
 				List<Object> payloads = new ArrayList<>();
-				AmqpInboundChannelAdapter.this.batchingStrategy.deBatch(message, fragment -> payloads
-						.add(AmqpInboundChannelAdapter.this.messageConverter.fromMessage(fragment)));
+				AmqpInboundChannelAdapter.this.batchingStrategy.deBatch(message,
+						fragment -> payloads.add(this.converter.fromMessage(fragment)));
 				payload = payloads;
 			}
 			else {
-				payload = AmqpInboundChannelAdapter.this.messageConverter.fromMessage(message);
+				payload = this.converter.fromMessage(message);
 			}
-			Map<String, Object> headers = AmqpInboundChannelAdapter.this.headerMapper
-					.toHeadersFromRequest(message.getMessageProperties());
-			if (isManualAck()) {
-				headers.put(AmqpHeaders.DELIVERY_TAG, message.getMessageProperties().getDeliveryTag());
+			return payload;
+		}
+
+		protected org.springframework.messaging.Message<Object> createMessageFromPayload(Object payload,
+				Channel channel, Map<String, Object> headers, long deliveryTag) {
+
+			if (this.manualAcks) {
+				headers.put(AmqpHeaders.DELIVERY_TAG, deliveryTag);
 				headers.put(AmqpHeaders.CHANNEL, channel);
 			}
 			if (AmqpInboundChannelAdapter.this.retryTemplate != null) {
 				headers.put(IntegrationMessageHeaderAccessor.DELIVERY_ATTEMPT, new AtomicInteger());
 			}
-			if (AmqpInboundChannelAdapter.this.bindSourceMessage) {
-				headers.put(IntegrationMessageHeaderAccessor.SOURCE_DATA, message);
-			}
-			final org.springframework.messaging.Message<Object> messagingMessage = getMessageBuilderFactory()
+			return getMessageBuilderFactory()
 					.withPayload(payload)
 					.copyHeaders(headers)
 					.build();
-			return messagingMessage;
 		}
 
-		private boolean isManualAck() {
-			return AmqpInboundChannelAdapter.this.messageListenerContainer.getAcknowledgeMode()
-					== AcknowledgeMode.MANUAL;
+	}
+
+	protected class BatchListener extends Listener implements ChannelAwareBatchMessageListener {
+
+		private final boolean batchModeMessages = BatchMode.MESSAGES.equals(AmqpInboundChannelAdapter.this.batchMode);
+
+		@Override
+		public void onMessageBatch(List<Message> messages, Channel channel) {
+			List<?> converted;
+			if (this.batchModeMessages) {
+				converted = convertMessages(messages, channel);
+			}
+			else {
+				converted = convertPayloads(messages, channel);
+			}
+			if (converted != null) {
+				org.springframework.messaging.Message<?> message =
+						createMessageFromPayload(converted, channel, new HashMap<>(),
+								messages.get(messages.size() - 1).getMessageProperties().getDeliveryTag());
+				try {
+					if (this.retryOps == null) {
+						setAttributesIfNecessary(messages, message);
+						sendMessage(message);
+					}
+					else {
+						this.retryOps.execute(
+								context -> {
+									StaticMessageHeaderAccessor.getDeliveryAttempt(message).incrementAndGet();
+									if (this.batchModeMessages) {
+										@SuppressWarnings("unchecked")
+										List<org.springframework.messaging.Message<?>> payloads =
+												(List<org.springframework.messaging.Message<?>>) message.getPayload();
+										payloads.forEach(payload -> StaticMessageHeaderAccessor
+												.getDeliveryAttempt(payload).incrementAndGet());
+									}
+									setAttributesIfNecessary(messages, message);
+									sendMessage(message);
+									return null;
+								}, this.recoverer);
+					}
+				}
+				finally {
+					if (this.retryOps == null) {
+						ATTRIBUTES_HOLDER.remove();
+					}
+				}
+			}
+		}
+
+		private List<org.springframework.messaging.Message<?>> convertMessages(List<Message> messages,
+				Channel channel) {
+
+			List<org.springframework.messaging.Message<?>> converted = new ArrayList<>();
+			try {
+				messages.forEach(message -> converted.add(createMessageFromAmqp(message, channel)));
+				return converted;
+			}
+			catch (MessageConversionException e) {
+				MessageChannel errorChannel = getErrorChannel();
+				if (errorChannel != null) {
+					setAttributesIfNecessary(messages, null);
+					getMessagingTemplate()
+							.send(errorChannel, buildErrorMessage(null,
+									EndpointUtils.errorMessagePayload(messages, channel, this.manualAcks, e)));
+				}
+				else {
+					throw e;
+				}
+			}
+			return null;
+		}
+
+		private List<?> convertPayloads(List<Message> messages, Channel channel) {
+			List<Object> converted = new ArrayList<>();
+			try {
+				messages.forEach(message -> converted.add(this.converter.fromMessage(message)));
+				return converted;
+			}
+			catch (MessageConversionException e) {
+				MessageChannel errorChannel = getErrorChannel();
+				if (errorChannel != null) {
+					setAttributesIfNecessary(messages, null);
+					getMessagingTemplate()
+							.send(errorChannel, buildErrorMessage(null,
+									EndpointUtils.errorMessagePayload(messages, channel, this.manualAcks, e)));
+				}
+				else {
+					throw e;
+				}
+			}
+			return null;
 		}
 
 	}

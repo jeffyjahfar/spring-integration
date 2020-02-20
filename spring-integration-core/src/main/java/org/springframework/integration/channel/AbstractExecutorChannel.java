@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2019 the original author or authors.
+ * Copyright 2015-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.Executor;
 
+import org.springframework.integration.IntegrationPatternType;
 import org.springframework.integration.dispatcher.AbstractDispatcher;
 import org.springframework.integration.support.MessagingExceptionWrapper;
 import org.springframework.lang.Nullable;
@@ -56,13 +57,13 @@ import org.springframework.util.CollectionUtils;
 public abstract class AbstractExecutorChannel extends AbstractSubscribableChannel
 		implements ExecutorChannelInterceptorAware {
 
-	protected volatile Executor executor; // NOSONAR
+	protected Executor executor; // NOSONAR
 
-	protected volatile AbstractDispatcher dispatcher; // NOSONAR
+	protected AbstractDispatcher dispatcher; // NOSONAR
 
-	protected volatile Integer maxSubscribers; // NOSONAR
+	protected Integer maxSubscribers; // NOSONAR
 
-	protected volatile int executorInterceptorsSize; // NOSONAR
+	protected int executorInterceptorsSize; // NOSONAR
 
 	public AbstractExecutorChannel(@Nullable Executor executor) {
 		this.executor = executor;
@@ -126,6 +127,11 @@ public abstract class AbstractExecutorChannel extends AbstractSubscribableChanne
 	@Override
 	public boolean hasExecutorInterceptors() {
 		return this.executorInterceptorsSize > 0;
+	}
+
+	@Override
+	public IntegrationPatternType getIntegrationPatternType() {
+		return IntegrationPatternType.executor_channel;
 	}
 
 	protected class MessageHandlingTask implements Runnable {

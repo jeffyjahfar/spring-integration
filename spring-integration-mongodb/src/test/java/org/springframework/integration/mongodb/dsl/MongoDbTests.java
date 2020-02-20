@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@
 package org.springframework.integration.mongodb.dsl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
@@ -30,13 +32,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.mongodb.MongoDbFactory;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.SimpleMongoClientDbFactory;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
+import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.integration.config.EnableIntegration;
@@ -52,8 +55,6 @@ import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.PollableChannel;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit4.SpringRunner;
-
-import com.mongodb.client.MongoClients;
 
 /**
  * @author Xavier Padro
@@ -107,7 +108,7 @@ public class MongoDbTests extends MongoDbAvailableTests {
 	private MongoOperations mongoTemplate;
 
 	@Before
-	public void setUp() throws Exception {
+	public void setUp() {
 		createPersons();
 	}
 
@@ -258,6 +259,25 @@ public class MongoDbTests extends MongoDbAvailableTests {
 		bulkOperations.execute();
 	}
 
+	@Autowired
+	@Qualifier("reactiveStore.input")
+	private MessageChannel reactiveStoreInput;
+
+	@Test
+	@MongoDbAvailable
+	public void testReactiveMongoDbMessageHandler() {
+		this.reactiveStoreInput.send(MessageBuilder.withPayload(createPerson("Bob")).build());
+
+		ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(REACTIVE_MONGO_DATABASE_FACTORY);
+
+		await().untilAsserted(() ->
+				assertThat(
+						reactiveMongoTemplate.findOne(new BasicQuery("{'name' : 'Bob'}"), Person.class, "data")
+								.block(Duration.ofSeconds(10)))
+						.isNotNull()
+						.extracting("name", "address.state").contains("Bob", "PA"));
+	}
+
 	@Configuration
 	@EnableIntegration
 	public static class ContextConfiguration {
@@ -325,8 +345,8 @@ public class MongoDbTests extends MongoDbAvailableTests {
 		}
 
 		@Bean
-		public MongoDbFactory mongoDbFactory() {
-			return new SimpleMongoClientDbFactory(MongoClients.create(), "test");
+		public MongoDatabaseFactory mongoDbFactory() {
+			return MONGO_DATABASE_FACTORY;
 		}
 
 		@Bean
@@ -397,6 +417,14 @@ public class MongoDbTests extends MongoDbAvailableTests {
 					.collectionName(COLLECTION_NAME)
 					.entityClass(Person.class);
 		}
+
+		@Bean
+		public IntegrationFlow reactiveStore() {
+			return f -> f
+					.channel(MessageChannels.flux())
+					.handle(MongoDb.reactiveOutboundChannelAdapter(REACTIVE_MONGO_DATABASE_FACTORY));
+		}
+
 
 	}
 

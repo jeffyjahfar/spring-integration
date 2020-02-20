@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate.ConfirmCallback;
 import org.springframework.amqp.rabbit.core.RabbitTemplate.ReturnCallback;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.Lifecycle;
+import org.springframework.integration.IntegrationPatternType;
 import org.springframework.integration.MessageTimeoutException;
 import org.springframework.integration.amqp.support.MappingUtils;
 import org.springframework.integration.support.AbstractIntegrationMessageBuilder;
@@ -61,6 +62,8 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 
 	private Duration waitForConfirmTimeout = DEFAULT_CONFIRM_TIMEOUT;
 
+	private boolean multiSend;
+
 	public AmqpOutboundEndpoint(AmqpTemplate amqpTemplate) {
 		Assert.notNull(amqpTemplate, "amqpTemplate must not be null");
 		this.amqpTemplate = amqpTemplate;
@@ -73,6 +76,10 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 		}
 	}
 
+	/**
+	 * Set to true if this endpoint is a gateway.
+	 * @param expectReply true for a gateway.
+	 */
 	public void setExpectReply(boolean expectReply) {
 		this.expectReply = expectReply;
 	}
@@ -86,6 +93,7 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 	 * @param waitForConfirm true to block until the confirmation or timeout is received.
 	 * @since 5.2
 	 * @see #setConfirmTimeout(long)
+	 * @see #setMultiSend(boolean)
 	 */
 	public void setWaitForConfirm(boolean waitForConfirm) {
 		this.waitForConfirm = waitForConfirm;
@@ -96,6 +104,27 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 		return this.expectReply ? "amqp:outbound-gateway" : "amqp:outbound-channel-adapter";
 	}
 
+	/**
+	 * If true, and the message payload is an {@link Iterable} of {@link Message}, send
+	 * the messages in a single invocation of the template (same channel) and optionally
+	 * wait for the confirms or die or perform all sends within a transaction (existing or
+	 * new).
+	 * @param multiSend true to send multiple messages.
+	 * @since 5.3
+	 * @see #setWaitForConfirm(boolean)
+	 */
+	public void setMultiSend(boolean multiSend) {
+		Assert.isTrue(this.rabbitTemplate != null
+				&& (!this.waitForConfirm || this.rabbitTemplate.getConnectionFactory().isSimplePublisherConfirms()),
+				() -> "To use multiSend, " + AmqpOutboundEndpoint.this.amqpTemplate
+					+ " must be a RabbitTemplate with a ConnectionFactory configured with simple confirms");
+		this.multiSend = multiSend;
+	}
+
+	@Override
+	public IntegrationPatternType getIntegrationPatternType() {
+		return this.expectReply ? super.getIntegrationPatternType() : IntegrationPatternType.outbound_channel_adapter;
+	}
 
 	@Override
 	public RabbitTemplate getRabbitTemplate() {
@@ -135,6 +164,10 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 		if (this.expectReply) {
 			return sendAndReceive(exchangeName, routingKey, requestMessage, correlationData);
 		}
+		if (this.multiSend && requestMessage.getPayload() instanceof Iterable) {
+			multiSend(requestMessage, exchangeName, routingKey);
+			return null;
+		}
 		else {
 			send(exchangeName, routingKey, requestMessage, correlationData);
 			if (this.waitForConfirm && correlationData != null) {
@@ -142,6 +175,23 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 			}
 			return null;
 		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private void multiSend(Message<?> requestMessage, String exchangeName, String routingKey) {
+		((Iterable<?>) requestMessage.getPayload()).forEach(payload -> {
+			Assert.state(payload instanceof Message,
+					"To use multiSend, the payload must be an Iterable<Message<?>>");
+		});
+		this.rabbitTemplate.invoke(template -> {
+			((Iterable<Message<?>>) requestMessage.getPayload()).forEach(message -> {
+				doRabbitSend(exchangeName, routingKey, message, null, (RabbitTemplate) template);
+			});
+			if (this.waitForConfirm) {
+				template.waitForConfirmsOrDie(this.waitForConfirmTimeout.toMillis());
+			}
+			return null;
+		});
 	}
 
 	private void waitForConfirm(Message<?> requestMessage, CorrelationData correlationData) {
@@ -168,12 +218,9 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 
 	private void send(String exchangeName, String routingKey,
 			final Message<?> requestMessage, CorrelationData correlationData) {
+
 		if (this.rabbitTemplate != null) {
-			MessageConverter converter = this.rabbitTemplate.getMessageConverter();
-			org.springframework.amqp.core.Message amqpMessage = MappingUtils.mapMessage(requestMessage, converter,
-					getHeaderMapper(), getDefaultDeliveryMode(), isHeadersMappedLast());
-			addDelayProperty(requestMessage, amqpMessage);
-			this.rabbitTemplate.send(exchangeName, routingKey, amqpMessage, correlationData);
+			doRabbitSend(exchangeName, routingKey, requestMessage, correlationData, this.rabbitTemplate);
 		}
 		else {
 			this.amqpTemplate.convertAndSend(exchangeName, routingKey, requestMessage.getPayload(),
@@ -183,6 +230,16 @@ public class AmqpOutboundEndpoint extends AbstractAmqpOutboundEndpoint
 						return message;
 					});
 		}
+	}
+
+	private void doRabbitSend(String exchangeName, String routingKey, final Message<?> requestMessage,
+			CorrelationData correlationData, RabbitTemplate template) {
+
+		MessageConverter converter = template.getMessageConverter();
+		org.springframework.amqp.core.Message amqpMessage = MappingUtils.mapMessage(requestMessage, converter,
+				getHeaderMapper(), getDefaultDeliveryMode(), isHeadersMappedLast());
+		addDelayProperty(requestMessage, amqpMessage);
+		template.send(exchangeName, routingKey, amqpMessage, correlationData);
 	}
 
 	private AbstractIntegrationMessageBuilder<?> sendAndReceive(String exchangeName, String routingKey,

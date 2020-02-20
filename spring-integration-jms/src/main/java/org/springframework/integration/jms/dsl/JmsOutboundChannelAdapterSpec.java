@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ public class JmsOutboundChannelAdapterSpec<S extends JmsOutboundChannelAdapterSp
 
 	protected final JmsTemplateSpec jmsTemplateSpec = new JmsTemplateSpec(); // NOSONAR final
 
-	JmsOutboundChannelAdapterSpec(JmsTemplate jmsTemplate) {
+	protected JmsOutboundChannelAdapterSpec(JmsTemplate jmsTemplate) {
 		this.target = new JmsSendingMessageHandler(jmsTemplate);
 	}
 
@@ -101,7 +101,7 @@ public class JmsOutboundChannelAdapterSpec<S extends JmsOutboundChannelAdapterSp
 	 * which a message will be sent.
 	 * @param destination the destination name.
 	 * @return the current {@link JmsOutboundChannelAdapterSpec}.
-	 * @see JmsSendingMessageHandler#setDestinationName(String)
+	 * @see JmsSendingMessageHandler#setDestinationExpression(Expression)
 	 */
 	public S destinationExpression(String destination) {
 		this.target.setDestinationExpression(PARSER.parseExpression(destination));
@@ -119,7 +119,7 @@ public class JmsOutboundChannelAdapterSpec<S extends JmsOutboundChannelAdapterSp
 	 * @param destinationFunction the destination function.
 	 * @param <P> the expected payload type.
 	 * @return the current {@link JmsOutboundChannelAdapterSpec}.
-	 * @see JmsSendingMessageHandler#setDestinationName(String)
+	 * @see JmsSendingMessageHandler#setDestinationExpression(Expression)
 	 * @see FunctionExpression
 	 */
 	public <P> S destination(Function<Message<P>, ?> destinationFunction) {
@@ -182,7 +182,7 @@ public class JmsOutboundChannelAdapterSpec<S extends JmsOutboundChannelAdapterSp
 			extends JmsOutboundChannelAdapterSpec<JmsOutboundChannelSpecTemplateAware>
 			implements ComponentsRegistration {
 
-		JmsOutboundChannelSpecTemplateAware(ConnectionFactory connectionFactory) {
+		protected JmsOutboundChannelSpecTemplateAware(ConnectionFactory connectionFactory) {
 			super(connectionFactory);
 		}
 

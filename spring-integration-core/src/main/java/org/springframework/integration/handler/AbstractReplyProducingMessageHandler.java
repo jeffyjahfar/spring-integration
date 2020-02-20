@@ -23,6 +23,7 @@ import org.aopalliance.aop.Advice;
 
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.BeanClassLoaderAware;
+import org.springframework.integration.IntegrationPatternType;
 import org.springframework.integration.handler.advice.HandleMessageAdvice;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.Message;
@@ -92,6 +93,15 @@ public abstract class AbstractReplyProducingMessageHandler extends AbstractMessa
 	}
 
 	@Override
+	public IntegrationPatternType getIntegrationPatternType() {
+		// Most out-of-the-box Spring Integration implementations provide an outbound gateway
+		// for particular external protocol. If an implementation doesn't belong to this category,
+		// it overrides this method to provide its own specific integration pattern type:
+		// service-activator, splitter, aggregator, router etc.
+		return IntegrationPatternType.outbound_gateway;
+	}
+
+	@Override
 	protected final void onInit() {
 		super.onInit();
 		initAdvisedRequestHandlerIfAny();
@@ -117,9 +127,6 @@ public abstract class AbstractReplyProducingMessageHandler extends AbstractMessa
 	protected void doInit() {
 	}
 
-	/**
-	 * {@inheritDoc}
-	 */
 	@Override
 	protected final void handleMessageInternal(Message<?> message) {
 		Object result;
@@ -182,7 +189,6 @@ public abstract class AbstractReplyProducingMessageHandler extends AbstractMessa
 		 * {@code ((AbstractReplyProducingMessageHandler.RequestHandler)
 		 * invocation.getThis()).getAdvisedHandler().getComponentName()}
 		 * @return the outer class instance.
-		 *
 		 * @since 4.3.2
 		 */
 		AbstractReplyProducingMessageHandler getAdvisedHandler();
@@ -192,7 +198,6 @@ public abstract class AbstractReplyProducingMessageHandler extends AbstractMessa
 	private class AdvisedRequestHandler implements RequestHandler {
 
 		AdvisedRequestHandler() {
-			super();
 		}
 
 		@Override

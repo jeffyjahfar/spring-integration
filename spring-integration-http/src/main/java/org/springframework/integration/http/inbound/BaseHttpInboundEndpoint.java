@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,12 +29,14 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.integration.IntegrationPatternType;
 import org.springframework.integration.context.OrderlyShutdownCapable;
 import org.springframework.integration.expression.ExpressionUtils;
 import org.springframework.integration.gateway.MessagingGatewaySupport;
 import org.springframework.integration.http.support.DefaultHttpHeaderMapper;
 import org.springframework.integration.http.support.IntegrationWebExchangeBindException;
 import org.springframework.integration.mapping.HeaderMapper;
+import org.springframework.lang.Nullable;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
@@ -189,7 +191,7 @@ public class BaseHttpInboundEndpoint extends MessagingGatewaySupport implements 
 	 * Specify the type of payload to be generated when the inbound HTTP request
 	 * content is read by the converters/encoders.
 	 * By default this value is null which means at runtime any "text" Content-Type will
-	 * result in String while all others default to <code>byte[].class</code>.
+	 * result in String while all others default to {@code byte[].class}.
 	 * @param requestPayloadType The payload type.
 	 */
 	public void setRequestPayloadTypeClass(Class<?> requestPayloadType) {
@@ -200,7 +202,7 @@ public class BaseHttpInboundEndpoint extends MessagingGatewaySupport implements 
 	 * Specify the type of payload to be generated when the inbound HTTP request
 	 * content is read by the converters/encoders.
 	 * By default this value is null which means at runtime any "text" Content-Type will
-	 * result in String while all others default to <code>byte[].class</code>.
+	 * result in String while all others default to {@code byte[].class}.
 	 * @param requestPayloadType The payload type.
 	 */
 	public void setRequestPayloadType(ResolvableType requestPayloadType) {
@@ -341,16 +343,12 @@ public class BaseHttpInboundEndpoint extends MessagingGatewaySupport implements 
 
 	@Override
 	public String getComponentType() {
-		return (this.expectReply) ? "http:inbound-gateway" : "http:inbound-channel-adapter";
+		return this.expectReply ? "http:inbound-gateway" : "http:inbound-channel-adapter";
 	}
 
-	/**
-	 * Checks if the request has a readable body (not a GET, HEAD, or OPTIONS request).
-	 * @param httpMethod the HTTP method to check
-	 * @return true or false if HTTP request can contain the body
-	 */
-	protected boolean isReadable(HttpMethod httpMethod) {
-		return !(CollectionUtils.containsInstance(NON_READABLE_BODY_HTTP_METHODS, httpMethod));
+	@Override
+	public IntegrationPatternType getIntegrationPatternType() {
+		return this.expectReply ? super.getIntegrationPatternType() : IntegrationPatternType.inbound_channel_adapter;
 	}
 
 	protected void validate(Object value) {
@@ -359,6 +357,15 @@ public class BaseHttpInboundEndpoint extends MessagingGatewaySupport implements 
 		if (errors.hasErrors()) {
 			throw new IntegrationWebExchangeBindException(getComponentName(), value, errors);
 		}
+	}
+
+	/**
+	 * Checks if the request has a readable body (not a GET, HEAD, or OPTIONS request).
+	 * @param httpMethod the HTTP method to check
+	 * @return true or false if HTTP request can contain the body
+	 */
+	protected static boolean isReadable(@Nullable HttpMethod httpMethod) {
+		return httpMethod != null && !(CollectionUtils.containsInstance(NON_READABLE_BODY_HTTP_METHODS, httpMethod));
 	}
 
 }

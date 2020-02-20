@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2019 the original author or authors.
+ * Copyright 2016-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,7 @@ package org.springframework.integration.mongodb.dsl;
 
 import java.util.function.Function;
 
-import org.springframework.data.mongodb.MongoDbFactory;
-import org.springframework.data.mongodb.core.CollectionCallback;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Query;
@@ -33,7 +32,7 @@ import org.springframework.messaging.Message;
 /**
  * A {@link MessageHandlerSpec} extension for the MongoDb Outbound endpoint {@link MongoDbOutboundGateway}
  *
- * @author Xavier Padr?
+ * @author Xavier Padro
  * @author Artem Bilan
  *
  * @since 5.0
@@ -41,12 +40,12 @@ import org.springframework.messaging.Message;
 public class MongoDbOutboundGatewaySpec
 		extends MessageHandlerSpec<MongoDbOutboundGatewaySpec, MongoDbOutboundGateway> {
 
-	MongoDbOutboundGatewaySpec(MongoDbFactory mongoDbFactory, MongoConverter mongoConverter) {
+	protected MongoDbOutboundGatewaySpec(MongoDatabaseFactory mongoDbFactory, MongoConverter mongoConverter) {
 		this.target = new MongoDbOutboundGateway(mongoDbFactory, mongoConverter);
 		this.target.setRequiresReply(true);
 	}
 
-	MongoDbOutboundGatewaySpec(MongoOperations mongoTemplate) {
+	protected MongoDbOutboundGatewaySpec(MongoOperations mongoTemplate) {
 		this.target = new MongoDbOutboundGateway(mongoTemplate);
 		this.target.setRequiresReply(true);
 	}
@@ -143,20 +142,6 @@ public class MongoDbOutboundGatewaySpec
 	 */
 	public <P> MongoDbOutboundGatewaySpec collectionNameFunction(Function<Message<P>, String> collectionNameFunction) {
 		this.target.setCollectionNameExpression(new FunctionExpression<>(collectionNameFunction));
-		return this;
-	}
-
-	/**
-	 * Reference to an instance of {@link CollectionCallback} which specifies the database operation to execute.
-	 * This property is mutually exclusive with {@link #query} and {@link #queryExpression} properties.
-	 * @param collectionCallback the {@link CollectionCallback} instance
-	 * @param <P> the type of the message payload.
-	 * @return the spec
-	 * @deprecated in favor of {@link #collectionCallback(MessageCollectionCallback)}
-	 */
-	@Deprecated
-	public <P> MongoDbOutboundGatewaySpec collectionCallback(CollectionCallback<P> collectionCallback) {
-		this.target.setCollectionCallback(collectionCallback);
 		return this;
 	}
 

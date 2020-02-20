@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,9 @@
 
 package org.springframework.integration.channel;
 
+import java.time.Duration;
+
 import org.reactivestreams.Publisher;
-import org.reactivestreams.Subscriber;
 
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
@@ -27,7 +28,7 @@ import org.springframework.messaging.SubscribableChannel;
 
 import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
@@ -40,7 +41,6 @@ import reactor.core.scheduler.Schedulers;
 public final class MessageChannelReactiveUtils {
 
 	private MessageChannelReactiveUtils() {
-		super();
 	}
 
 	@SuppressWarnings("unchecked")
@@ -71,35 +71,12 @@ public final class MessageChannelReactiveUtils {
 		});
 	}
 
+	@SuppressWarnings("unchecked")
 	private static <T> Publisher<Message<T>> adaptPollableChannelToPublisher(PollableChannel inputChannel) {
-		return new PollableChannelPublisherAdapter<>(inputChannel);
-	}
-
-	private static final class PollableChannelPublisherAdapter<T> implements Publisher<Message<T>> {
-
-		private final PollableChannel channel;
-
-		PollableChannelPublisherAdapter(final PollableChannel channel) {
-			this.channel = channel;
-		}
-
-		@Override
-		@SuppressWarnings("unchecked")
-		public void subscribe(Subscriber<? super Message<T>> subscriber) {
-			Flux
-					.<Message<T>>create(sink ->
-									sink.onRequest(n -> {
-										Message<?> m;
-										while (!sink.isCancelled() && n-- > 0
-												&& (m = this.channel.receive()) != null) { // NOSONAR
-											sink.next((Message<T>) m);
-										}
-									}),
-							FluxSink.OverflowStrategy.IGNORE)
-					.subscribeOn(Schedulers.elastic())
-					.subscribe(subscriber);
-		}
-
+		return Mono.fromCallable(() -> (Message<T>) inputChannel.receive(0))
+				.subscribeOn(Schedulers.boundedElastic())
+				.repeatWhenEmpty(it -> it.delayElements(Duration.ofMillis(100))) // NOSONAR - magic
+				.repeat();
 	}
 
 }

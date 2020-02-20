@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2019 the original author or authors.
+ * Copyright 2017-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 package org.springframework.integration.http.outbound;
 
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -27,7 +26,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.function.Supplier;
 
 import javax.xml.transform.Source;
 
@@ -45,6 +43,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.integration.IntegrationPatternType;
 import org.springframework.integration.expression.ExpressionEvalMap;
 import org.springframework.integration.expression.ExpressionUtils;
 import org.springframework.integration.expression.ValueExpression;
@@ -55,15 +54,13 @@ import org.springframework.integration.support.AbstractIntegrationMessageBuilder
 import org.springframework.integration.support.MessageBuilderFactory;
 import org.springframework.lang.Nullable;
 import org.springframework.messaging.Message;
-import org.springframework.messaging.MessageHandlingException;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
-import org.springframework.web.util.UriComponents;
-import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.DefaultUriBuilderFactory;
 
 /**
  * Base class for http outbound adapter/gateway.
@@ -84,6 +81,8 @@ public abstract class AbstractHttpRequestExecutingMessageHandler extends Abstrac
 	private static final List<HttpMethod> NO_BODY_HTTP_METHODS =
 			Arrays.asList(HttpMethod.GET, HttpMethod.HEAD, HttpMethod.TRACE);
 
+	protected final DefaultUriBuilderFactory uriFactory = new DefaultUriBuilderFactory(); // NOSONAR - final
+
 	private final Map<String, Expression> uriVariableExpressions = new HashMap<>();
 
 	private final Expression uriExpression;
@@ -93,8 +92,6 @@ public abstract class AbstractHttpRequestExecutingMessageHandler extends Abstrac
 	private SimpleEvaluationContext simpleEvaluationContext;
 
 	private boolean trustedSpel;
-
-	private boolean encodeUri = true;
 
 	private Expression httpMethodExpression = new ValueExpression<>(HttpMethod.POST);
 
@@ -125,10 +122,28 @@ public abstract class AbstractHttpRequestExecutingMessageHandler extends Abstrac
 	 * {@link org.springframework.web.client.RestTemplate}. The default value is
 	 * <code>true</code>.
 	 * @param encodeUri true if the URI should be encoded.
-	 * @see UriComponentsBuilder
+	 * @see org.springframework.web.util.UriComponentsBuilder
+	 * @deprecated since 5.3 in favor of {@link #setEncodingMode}
 	 */
+	@Deprecated
 	public void setEncodeUri(boolean encodeUri) {
-		this.encodeUri = encodeUri;
+		setEncodingMode(
+				encodeUri
+						? DefaultUriBuilderFactory.EncodingMode.TEMPLATE_AND_VALUES
+						: DefaultUriBuilderFactory.EncodingMode.NONE);
+	}
+
+	/**
+	 * Set the encoding mode to use.
+	 * By default this is set to {@link DefaultUriBuilderFactory.EncodingMode#TEMPLATE_AND_VALUES}.
+	 * For more complicated scenarios consider to configure an {@link org.springframework.web.util.UriTemplateHandler}
+	 * on an externally provided {@link org.springframework.web.client.RestTemplate}.
+	 * @param encodingMode the mode to use for uri encoding
+	 * @since 5.3
+	 */
+	public void setEncodingMode(DefaultUriBuilderFactory.EncodingMode encodingMode) {
+		Assert.notNull(encodingMode, "'encodingMode' must not be null");
+		this.uriFactory.setEncodingMode(encodingMode);
 	}
 
 	/**
@@ -267,6 +282,11 @@ public abstract class AbstractHttpRequestExecutingMessageHandler extends Abstrac
 	}
 
 	@Override
+	public IntegrationPatternType getIntegrationPatternType() {
+		return this.expectReply ? super.getIntegrationPatternType() : IntegrationPatternType.outbound_channel_adapter;
+	}
+
+	@Override
 	protected void doInit() {
 		BeanFactory beanFactory = getBeanFactory();
 		this.evaluationContext = ExpressionUtils.createStandardEvaluationContext(beanFactory);
@@ -274,6 +294,7 @@ public abstract class AbstractHttpRequestExecutingMessageHandler extends Abstrac
 	}
 
 	@Override
+	@Nullable
 	protected Object handleRequestMessage(Message<?> requestMessage) {
 		HttpMethod httpMethod = determineHttpMethod(requestMessage);
 		if (this.extractPayloadExplicitlySet && logger.isWarnEnabled() && !shouldIncludeRequestBody(httpMethod)) {
@@ -285,57 +306,46 @@ public abstract class AbstractHttpRequestExecutingMessageHandler extends Abstrac
 		Object expectedResponseType = determineExpectedResponseType(requestMessage);
 
 		HttpEntity<?> httpRequest = generateHttpRequest(requestMessage, httpMethod);
-		return exchange(() -> generateUri(requestMessage), httpMethod, httpRequest, expectedResponseType,
-				requestMessage);
-	}
-
-	protected abstract Object exchange(Supplier<URI> uriSupplier, HttpMethod httpMethod, HttpEntity<?> httpRequest,
-			Object expectedResponseType, Message<?> requestMessage);
-
-	private URI generateUri(Message<?> requestMessage) {
 		Object uri = this.uriExpression.getValue(this.evaluationContext, requestMessage);
 		Assert.state(uri instanceof String || uri instanceof URI,
 				() -> "'uriExpression' evaluation must result in a 'String' or 'URI' instance, not: "
 						+ (uri == null ? "null" : uri.getClass()));
-		Map<String, ?> uriVariables = determineUriVariables(requestMessage);
-		UriComponentsBuilder uriComponentsBuilder =
-				uri instanceof String
-						? UriComponentsBuilder.fromUriString((String) uri)
-						: UriComponentsBuilder.fromUri((URI) uri);
-		UriComponents uriComponents = uriComponentsBuilder.buildAndExpand(uriVariables);
-		try {
-			return this.encodeUri ? uriComponents.encode().toUri() : new URI(uriComponents.toUriString());
+
+		Map<String, ?> uriVariables = null;
+
+		if (uri instanceof String) {
+			uriVariables = determineUriVariables(requestMessage);
 		}
-		catch (URISyntaxException e) {
-			throw new MessageHandlingException(requestMessage, "Invalid URI [" + uri + "] in the [" + this + ']', e);
-		}
+
+		return exchange(uri, httpMethod, httpRequest, expectedResponseType, requestMessage, uriVariables);
 	}
 
+	@Nullable
+	protected abstract Object exchange(Object uri, HttpMethod httpMethod, HttpEntity<?> httpRequest,
+			Object expectedResponseType, Message<?> requestMessage, Map<String, ?> uriVariables);
+
 	protected Object getReply(ResponseEntity<?> httpResponse) {
-		if (this.expectReply) {
-			HttpHeaders httpHeaders = httpResponse.getHeaders();
-			Map<String, Object> headers = this.headerMapper.toHeaders(httpHeaders);
-			if (this.transferCookies) {
-				doConvertSetCookie(headers);
-			}
-
-			AbstractIntegrationMessageBuilder<?> replyBuilder = null;
-			MessageBuilderFactory messageBuilderFactory = getMessageBuilderFactory();
-			if (httpResponse.hasBody()) {
-				Object responseBody = httpResponse.getBody();
-				replyBuilder = (responseBody instanceof Message<?>)
-						? messageBuilderFactory.fromMessage((Message<?>) responseBody)
-						: messageBuilderFactory.withPayload(responseBody); // NOSONAR - hasBody()
-
-			}
-			else {
-				replyBuilder = messageBuilderFactory.withPayload(httpResponse);
-			}
-			replyBuilder.setHeader(org.springframework.integration.http.HttpHeaders.STATUS_CODE,
-					httpResponse.getStatusCode());
-			return replyBuilder.copyHeaders(headers);
+		HttpHeaders httpHeaders = httpResponse.getHeaders();
+		Map<String, Object> headers = this.headerMapper.toHeaders(httpHeaders);
+		if (this.transferCookies) {
+			doConvertSetCookie(headers);
 		}
-		return null;
+
+		AbstractIntegrationMessageBuilder<?> replyBuilder;
+		MessageBuilderFactory messageBuilderFactory = getMessageBuilderFactory();
+		if (httpResponse.hasBody()) {
+			Object responseBody = httpResponse.getBody();
+			replyBuilder = (responseBody instanceof Message<?>)
+					? messageBuilderFactory.fromMessage((Message<?>) responseBody)
+					: messageBuilderFactory.withPayload(responseBody); // NOSONAR - hasBody()
+
+		}
+		else {
+			replyBuilder = messageBuilderFactory.withPayload(httpResponse);
+		}
+		replyBuilder.setHeader(org.springframework.integration.http.HttpHeaders.STATUS_CODE,
+				httpResponse.getStatusCode());
+		return replyBuilder.copyHeaders(headers);
 	}
 
 	/**

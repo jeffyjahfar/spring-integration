@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,6 +54,7 @@ import org.springframework.integration.annotation.Poller;
 import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.channel.MessagePublishingErrorHandler;
 import org.springframework.integration.config.IntegrationConfigUtils;
+import org.springframework.integration.context.IntegrationObjectSupport;
 import org.springframework.integration.context.Orderable;
 import org.springframework.integration.endpoint.AbstractEndpoint;
 import org.springframework.integration.endpoint.AbstractPollingEndpoint;
@@ -65,6 +66,7 @@ import org.springframework.integration.handler.AbstractMessageProducingHandler;
 import org.springframework.integration.handler.AbstractReplyProducingMessageHandler;
 import org.springframework.integration.handler.LambdaMessageProcessor;
 import org.springframework.integration.handler.MessageProcessor;
+import org.springframework.integration.handler.ReactiveMessageHandlerAdapter;
 import org.springframework.integration.handler.ReplyProducingMessageHandlerWrapper;
 import org.springframework.integration.handler.advice.HandleMessageAdvice;
 import org.springframework.integration.router.AbstractMessageRouter;
@@ -103,7 +105,7 @@ public abstract class AbstractMethodAnnotationPostProcessor<T extends Annotation
 
 	protected static final String SEND_TIMEOUT_ATTRIBUTE = "sendTimeout";
 
-	protected final Log logger = LogFactory.getLog(this.getClass()); // NOSONAR
+	protected final Log logger = LogFactory.getLog(getClass()); // NOSONAR
 
 	protected final List<String> messageHandlerAttributes = new ArrayList<>(); // NOSONAR
 
@@ -155,24 +157,17 @@ public abstract class AbstractMethodAnnotationPostProcessor<T extends Annotation
 
 		MessageHandler handler = createHandler(bean, method, annotations);
 
-		orderable(method, handler);
-		producerOrRouter(annotations, handler);
+		if (!(handler instanceof ReactiveMessageHandlerAdapter)) {
+			orderable(method, handler);
+			producerOrRouter(annotations, handler);
 
-		if (!handler.equals(sourceHandler)) {
-			String handlerBeanName = generateHandlerBeanName(beanName, method);
-			if (handler instanceof ReplyProducingMessageHandlerWrapper
-					&& StringUtils.hasText(MessagingAnnotationUtils.endpointIdValue(method))) {
-				handlerBeanName = handlerBeanName + ".wrapper";
+			if (!handler.equals(sourceHandler)) {
+				handler = registerHandlerBean(beanName, method, handler);
 			}
-			this.beanFactory.registerSingleton(handlerBeanName, handler);
-			handler = (MessageHandler) this.beanFactory.initializeBean(handler, handlerBeanName);
-			if (handler instanceof DisposableBean && this.disposables != null) {
-				this.disposables.add((DisposableBean) handler);
-			}
+
+			handler = annotated(method, handler);
+			handler = adviceChain(beanName, annotations, handler);
 		}
-
-		handler = annotated(method, handler);
-		handler = adviceChain(beanName, annotations, handler);
 
 		AbstractEndpoint endpoint = createEndpoint(handler, method, annotations);
 		if (endpoint != null) {
@@ -181,6 +176,26 @@ public abstract class AbstractMethodAnnotationPostProcessor<T extends Annotation
 		else {
 			return handler;
 		}
+	}
+
+	private MessageHandler registerHandlerBean(String beanName, Method method, final MessageHandler handler) {
+		MessageHandler handlerBean = handler;
+		String handlerBeanName = generateHandlerBeanName(beanName, method);
+		if (handlerBean instanceof ReplyProducingMessageHandlerWrapper
+				&& StringUtils.hasText(MessagingAnnotationUtils.endpointIdValue(method))) {
+			handlerBeanName = handlerBeanName + ".wrapper";
+		}
+		if (handlerBean instanceof IntegrationObjectSupport) {
+			((IntegrationObjectSupport) handlerBean).setComponentName(
+					handlerBeanName.substring(0,
+							handlerBeanName.indexOf(IntegrationConfigUtils.HANDLER_ALIAS_SUFFIX)));
+		}
+		this.beanFactory.registerSingleton(handlerBeanName, handler);
+		handlerBean = (MessageHandler) this.beanFactory.initializeBean(handlerBean, handlerBeanName);
+		if (handlerBean instanceof DisposableBean && this.disposables != null) {
+			this.disposables.add((DisposableBean) handlerBean);
+		}
+		return handlerBean;
 	}
 
 
@@ -367,7 +382,13 @@ public abstract class AbstractMethodAnnotationPostProcessor<T extends Annotation
 			Assert.state(ObjectUtils.isEmpty(pollers), "A '@Poller' should not be specified for Annotation-based " +
 					"endpoint, since '" + inputChannel + "' is a SubscribableChannel (not pollable).");
 			if (inputChannel instanceof Publisher) {
-				endpoint = new ReactiveStreamsConsumer(inputChannel, handler);
+				if (handler instanceof ReactiveMessageHandlerAdapter) {
+					endpoint = new ReactiveStreamsConsumer(inputChannel,
+							((ReactiveMessageHandlerAdapter) handler).getDelegate());
+				}
+				else {
+					endpoint = new ReactiveStreamsConsumer(inputChannel, handler);
+				}
 			}
 			else {
 				endpoint = new EventDrivenConsumer((SubscribableChannel) inputChannel, handler);
@@ -396,11 +417,11 @@ public abstract class AbstractMethodAnnotationPostProcessor<T extends Annotation
 
 			if (StringUtils.hasText(ref)) {
 				Assert.state(!StringUtils.hasText(triggerRef)
-						&& !StringUtils.hasText(executorRef)
-						&& !StringUtils.hasText(cron)
-						&& !StringUtils.hasText(fixedDelayValue)
-						&& !StringUtils.hasText(fixedRateValue)
-						&& !StringUtils.hasText(maxMessagesPerPollValue), // NOSONAR boolean complexity
+								&& !StringUtils.hasText(executorRef)
+								&& !StringUtils.hasText(cron)
+								&& !StringUtils.hasText(fixedDelayValue)
+								&& !StringUtils.hasText(fixedRateValue)
+								&& !StringUtils.hasText(maxMessagesPerPollValue), // NOSONAR boolean complexity
 						"The '@Poller' 'ref' attribute is mutually exclusive with other attributes.");
 				pollerMetadata = this.beanFactory.getBean(ref, PollerMetadata.class);
 			}

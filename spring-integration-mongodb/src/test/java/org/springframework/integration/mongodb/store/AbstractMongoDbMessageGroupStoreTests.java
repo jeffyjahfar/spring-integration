@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,6 @@ import org.junit.Test;
 
 import org.springframework.context.support.ClassPathXmlApplicationContext;
 import org.springframework.context.support.GenericApplicationContext;
-import org.springframework.data.mongodb.core.SimpleMongoClientDbFactory;
 import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.channel.QueueChannel;
 import org.springframework.integration.history.MessageHistory;
@@ -47,8 +46,6 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.support.GenericMessage;
 
-import com.mongodb.client.MongoClients;
-
 /**
  * @author Oleg Zhurakousky
  * @author Gary Russell
@@ -59,9 +56,6 @@ public abstract class AbstractMongoDbMessageGroupStoreTests extends MongoDbAvail
 
 	protected final GenericApplicationContext testApplicationContext = TestUtils.createTestApplicationContext();
 
-	protected final SimpleMongoClientDbFactory clientDbFactory =
-			new SimpleMongoClientDbFactory(MongoClients.create(), "test");
-
 	@Before
 	public void setup() {
 		this.testApplicationContext.refresh();
@@ -70,7 +64,7 @@ public abstract class AbstractMongoDbMessageGroupStoreTests extends MongoDbAvail
 	@After
 	public void tearDown() {
 		this.testApplicationContext.close();
-		cleanupCollections(this.clientDbFactory);
+		cleanupCollections(MONGO_DATABASE_FACTORY);
 	}
 
 	@Test
@@ -423,7 +417,7 @@ public abstract class AbstractMongoDbMessageGroupStoreTests extends MongoDbAvail
 	//	@Test
 	//	@MongoDbAvailable
 	//	public void testConcurrentModifications() throws Exception{
-	//		MongoDbFactory mongoDbFactory = this.prepareMongoFactory();
+	//		MongoDatabaseFactory mongoDbFactory = this.prepareMongoFactory();
 	//		final MongoDbMessageStore store1 = new MongoDbMessageStore(mongoDbFactory);
 	//		final MongoDbMessageStore store2 = new MongoDbMessageStore(mongoDbFactory);
 	//

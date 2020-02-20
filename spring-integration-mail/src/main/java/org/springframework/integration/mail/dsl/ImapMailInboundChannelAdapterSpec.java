@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 the original author or authors.
+ * Copyright 2014-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,15 +30,15 @@ import org.springframework.integration.mail.SearchTermStrategy;
 public class ImapMailInboundChannelAdapterSpec
 		extends MailInboundChannelAdapterSpec<ImapMailInboundChannelAdapterSpec, ImapMailReceiver> {
 
-	ImapMailInboundChannelAdapterSpec() {
+	protected ImapMailInboundChannelAdapterSpec() {
 		super(new ImapMailReceiver());
 	}
 
-	ImapMailInboundChannelAdapterSpec(ImapMailReceiver imapMailReceiver) {
+	protected ImapMailInboundChannelAdapterSpec(ImapMailReceiver imapMailReceiver) {
 		super(imapMailReceiver, true);
 	}
 
-	ImapMailInboundChannelAdapterSpec(String url) {
+	protected ImapMailInboundChannelAdapterSpec(String url) {
 		super(new ImapMailReceiver(url), false);
 	}
 
@@ -63,22 +63,6 @@ public class ImapMailInboundChannelAdapterSpec
 	public ImapMailInboundChannelAdapterSpec shouldMarkMessagesAsRead(boolean shouldMarkMessagesAsRead) {
 		assertReceiver();
 		this.receiver.setShouldMarkMessagesAsRead(shouldMarkMessagesAsRead);
-		return this;
-	}
-
-	/**
-	 * How often to recycle the idle task (in case of a silently dropped connection).
-	 * Seconds; default 120 (2 minutes).
-	 * @param interval the interval.
-	 * @return the spec.
-	 * @see ImapMailReceiver#setCancelIdleInterval(long)
-	 * @since 5.0.10
-	 * @deprecated since 5.2: there is no idle task started for polling channel adapter.
-	 */
-	@Deprecated
-	public ImapMailInboundChannelAdapterSpec cancelIdleInterval(long interval) {
-		assertReceiver();
-		this.receiver.setCancelIdleInterval(interval);
 		return this;
 	}
 

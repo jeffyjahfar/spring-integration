@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2019 the original author or authors.
+ * Copyright 2014-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,16 +33,19 @@ import org.springframework.integration.sftp.inbound.SftpInboundFileSynchronizing
 import com.jcraft.jsch.ChannelSftp;
 
 /**
- * A {@link RemoteFileInboundChannelAdapterSpec} for a {@link SftpInboundFileSynchronizingMessageSource}.
+ * A {@link RemoteFileInboundChannelAdapterSpec} for an {@link SftpInboundFileSynchronizingMessageSource}.
  *
  * @author Artem Bilan
+ *
  * @since 5.0
  */
 public class SftpInboundChannelAdapterSpec
 		extends RemoteFileInboundChannelAdapterSpec<ChannelSftp.LsEntry, SftpInboundChannelAdapterSpec,
 				SftpInboundFileSynchronizingMessageSource> {
 
-	SftpInboundChannelAdapterSpec(SessionFactory<ChannelSftp.LsEntry> sessionFactory, Comparator<File> comparator) {
+	protected SftpInboundChannelAdapterSpec(SessionFactory<ChannelSftp.LsEntry> sessionFactory,
+			Comparator<File> comparator) {
+
 		super(new SftpInboundFileSynchronizer(sessionFactory));
 		this.target = new SftpInboundFileSynchronizingMessageSource(this.synchronizer, comparator);
 	}
@@ -67,7 +70,6 @@ public class SftpInboundChannelAdapterSpec
 		return filter(composeFilters(new SftpRegexPatternFileListFilter(regex)));
 	}
 
-	@SuppressWarnings("unchecked")
 	private CompositeFileListFilter<ChannelSftp.LsEntry> composeFilters(FileListFilter<ChannelSftp.LsEntry>
 			fileListFilter) {
 		CompositeFileListFilter<ChannelSftp.LsEntry> compositeFileListFilter = new CompositeFileListFilter<>();

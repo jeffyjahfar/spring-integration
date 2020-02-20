@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2019 the original author or authors.
+ * Copyright 2002-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,12 +42,14 @@ import org.springframework.integration.endpoint.EventDrivenConsumer;
 import org.springframework.integration.endpoint.PollingConsumer;
 import org.springframework.integration.endpoint.ReactiveStreamsConsumer;
 import org.springframework.integration.handler.AbstractReplyProducingMessageHandler;
+import org.springframework.integration.handler.ReactiveMessageHandlerAdapter;
 import org.springframework.integration.handler.advice.HandleMessageAdvice;
 import org.springframework.integration.scheduling.PollerMetadata;
 import org.springframework.integration.support.channel.ChannelResolverUtils;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.PollableChannel;
+import org.springframework.messaging.ReactiveMessageHandler;
 import org.springframework.messaging.SubscribableChannel;
 import org.springframework.messaging.core.DestinationResolver;
 import org.springframework.scheduling.TaskScheduler;
@@ -74,7 +76,7 @@ public class ConsumerEndpointFactoryBean
 		implements FactoryBean<AbstractEndpoint>, BeanFactoryAware, BeanNameAware, BeanClassLoaderAware,
 		InitializingBean, SmartLifecycle, DisposableBean {
 
-	private static final Log logger = LogFactory.getLog(ConsumerEndpointFactoryBean.class);
+	private static final Log LOGGER = LogFactory.getLog(ConsumerEndpointFactoryBean.class);
 
 	private final Object initializationMonitor = new Object();
 
@@ -112,11 +114,17 @@ public class ConsumerEndpointFactoryBean
 
 	private volatile boolean initialized;
 
-	public void setHandler(MessageHandler handler) {
-		Assert.notNull(handler, "handler must not be null");
+	public void setHandler(Object handler) {
+		Assert.isTrue(handler instanceof MessageHandler || handler instanceof ReactiveMessageHandler,
+				"'handler' must be an instance of 'MessageHandler' or 'ReactiveMessageHandler'");
 		synchronized (this.handlerMonitor) {
 			Assert.isNull(this.handler, "handler cannot be overridden");
-			this.handler = handler;
+			if (handler instanceof ReactiveMessageHandler) {
+				this.handler = new ReactiveMessageHandlerAdapter((ReactiveMessageHandler) handler);
+			}
+			else {
+				this.handler = (MessageHandler) handler;
+			}
 		}
 	}
 
@@ -184,37 +192,46 @@ public class ConsumerEndpointFactoryBean
 	@Override
 	public void afterPropertiesSet() {
 		if (this.beanName == null) {
-			logger.error("The MessageHandler [" + this.handler + "] will be created without a 'componentName'. " +
+			LOGGER.error("The MessageHandler [" + this.handler + "] will be created without a 'componentName'. " +
 					"Consider specifying the 'beanName' property on this ConsumerEndpointFactoryBean.");
 		}
 		else {
-			try {
-				if (!this.beanName.startsWith("org.springframework")) {
-					MessageHandler targetHandler = this.handler;
-					if (AopUtils.isAopProxy(targetHandler)) {
-						Object target = ((Advised) targetHandler).getTargetSource().getTarget();
-						if (target instanceof MessageHandler) {
-							targetHandler = (MessageHandler) target;
-						}
-					}
-					if (targetHandler instanceof IntegrationObjectSupport) {
-						((IntegrationObjectSupport) targetHandler).setComponentName(this.beanName);
-					}
-				}
-			}
-			catch (Exception e) {
-				if (logger.isDebugEnabled()) {
-					logger.debug("Could not set component name for handler "
-							+ this.handler + " for " + this.beanName + " :" + e.getMessage());
-				}
-			}
+			populateComponentNameIfAny();
 		}
 
-		adviceChain();
+		if (!(this.handler instanceof ReactiveMessageHandlerAdapter)) {
+			adviceChain();
+		}
+		else if (!CollectionUtils.isEmpty(this.adviceChain)) {
+			LOGGER.warn("the advice chain cannot be applied to a 'ReactiveMessageHandler'");
+		}
 		if (this.channelResolver == null) {
 			this.channelResolver = ChannelResolverUtils.getChannelResolver(this.beanFactory);
 		}
 		initializeEndpoint();
+	}
+
+	private void populateComponentNameIfAny() {
+		try {
+			if (!this.beanName.startsWith("org.springframework")) {
+				MessageHandler targetHandler = this.handler;
+				if (AopUtils.isAopProxy(targetHandler)) {
+					Object target = ((Advised) targetHandler).getTargetSource().getTarget();
+					if (target instanceof MessageHandler) {
+						targetHandler = (MessageHandler) target;
+					}
+				}
+				if (targetHandler instanceof IntegrationObjectSupport) {
+					((IntegrationObjectSupport) targetHandler).setComponentName(this.beanName);
+				}
+			}
+		}
+		catch (Exception e) {
+			if (LOGGER.isDebugEnabled()) {
+				LOGGER.debug("Could not set component name for handler "
+						+ this.handler + " for " + this.beanName + " :" + e.getMessage());
+			}
+		}
 	}
 
 	private void adviceChain() {
@@ -282,7 +299,13 @@ public class ConsumerEndpointFactoryBean
 				pollingConsumer(channel);
 			}
 			else {
-				this.endpoint = new ReactiveStreamsConsumer(channel, this.handler);
+				if (this.handler instanceof ReactiveMessageHandlerAdapter) {
+					this.endpoint = new ReactiveStreamsConsumer(channel,
+							((ReactiveMessageHandlerAdapter) this.handler).getDelegate());
+				}
+				else {
+					this.endpoint = new ReactiveStreamsConsumer(channel, this.handler);
+				}
 			}
 			this.endpoint.setBeanName(this.beanName);
 			this.endpoint.setBeanFactory(this.beanFactory);
@@ -301,10 +324,10 @@ public class ConsumerEndpointFactoryBean
 				() -> "A poller should not be specified for endpoint '" + this.beanName
 						+ "', since '" + channel + "' is a SubscribableChannel (not pollable).");
 		this.endpoint = new EventDrivenConsumer((SubscribableChannel) channel, this.handler);
-		if (logger.isWarnEnabled()
+		if (LOGGER.isWarnEnabled()
 				&& Boolean.FALSE.equals(this.autoStartup)
 				&& channel instanceof FixedSubscriberChannel) {
-			logger.warn("'autoStartup=\"false\"' has no effect when using a FixedSubscriberChannel");
+			LOGGER.warn("'autoStartup=\"false\"' has no effect when using a FixedSubscriberChannel");
 		}
 	}
 
